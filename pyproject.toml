@@ -7,7 +7,17 @@ authors = [
     { name = "Seth Hardin", email = "personal@sethhardin.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "PySide6>=6.7.0",
+    "huggingface_hub>=0.24.0",
+    "httpx>=0.27.0",
+    "typer>=0.12.0",
+    "markdown>=3.6",
+    "pygments>=2.18",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+]
+# Optional: llama-cpp-python (requires manual install with correct flags for your hardware)
 
 [project.scripts]
 llm-manager = "llm_manager:main"
