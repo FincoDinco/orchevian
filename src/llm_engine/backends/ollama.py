@@ -1,0 +1,193 @@
+"""Ollama backend. Talks to ``http://127.0.0.1:11434`` (never ``localhost``)."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+from datetime import datetime
+from typing import Any
+
+import httpx
+
+from llm_engine.backends.protocol import ModelHandle
+from llm_engine.domain.errors import EngineError
+from llm_engine.domain.models import (
+    BackendName,
+    CancelToken,
+    ChatTurn,
+    GenerationParams,
+    LoadedHandle,
+    LoadOptions,
+    LocalModel,
+    ModelRef,
+)
+
+OLLAMA_HOST = "127.0.0.1"
+OLLAMA_PORT = 11434
+OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
+_DOWN = f"Ollama is not running at {OLLAMA_HOST}:{OLLAMA_PORT}"
+
+
+def _parse_modified(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        return parsed.replace(tzinfo=None)
+    return parsed
+
+
+def _str_details(raw: object) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    details: dict[str, str] = {}
+    for key, value in raw.items():
+        if value is None:
+            continue
+        details[str(key)] = str(value)
+    return details
+
+
+def _handle_options(handle: LoadedHandle) -> LoadOptions:
+    options = getattr(handle, "options", None)
+    if isinstance(options, LoadOptions):
+        return options
+    return LoadOptions()
+
+
+class OllamaBackend:
+    name = BackendName.OLLAMA
+
+    def __init__(self, client: httpx.Client | None = None) -> None:
+        if client is None:
+            self._client = httpx.Client(base_url=OLLAMA_BASE_URL, timeout=5.0, trust_env=False)
+            self._owns_client = True
+        else:
+            self._client = client
+            self._owns_client = False
+
+    def is_available(self) -> tuple[bool, str | None]:
+        try:
+            response = self._client.get("/api/tags")
+        except httpx.RequestError as exc:
+            return False, f"{_DOWN} ({exc})"
+        if response.status_code == 200:
+            return True, None
+        return False, f"Ollama at {OLLAMA_HOST}:{OLLAMA_PORT} returned HTTP {response.status_code}"
+
+    def list_models(self) -> list[LocalModel]:
+        try:
+            response = self._client.get("/api/tags")
+        except httpx.RequestError as exc:
+            raise EngineError("backend_unavailable", f"{_DOWN} ({exc})") from exc
+        if response.status_code != 200:
+            raise EngineError(
+                "backend_unavailable",
+                f"Ollama at {OLLAMA_HOST}:{OLLAMA_PORT} returned HTTP {response.status_code}",
+            )
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            raise EngineError("backend_unavailable", "Ollama returned invalid JSON") from exc
+        raw_models = payload.get("models", []) if isinstance(payload, dict) else None
+        if not isinstance(raw_models, list):
+            raise EngineError(
+                "backend_unavailable",
+                "Ollama /api/tags returned an unexpected payload",
+            )
+        models: list[LocalModel] = []
+        for item in raw_models:
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+            size = item.get("size") or 0
+            try:
+                size_bytes = int(size)
+            except (TypeError, ValueError):
+                size_bytes = 0
+            models.append(
+                LocalModel(
+                    ref=ModelRef(BackendName.OLLAMA, str(item["name"])),
+                    path=None,
+                    size_bytes=size_bytes,
+                    modified_at=_parse_modified(item.get("modified_at")),
+                    details=_str_details(item.get("details")),
+                )
+            )
+        return models
+
+    def load(self, model: LocalModel, options: LoadOptions | None = None) -> ModelHandle:
+        return ModelHandle(model=model, options=options or LoadOptions())
+
+    def unload(self, handle: LoadedHandle) -> None:
+        del handle
+
+    def stream_generate(
+        self,
+        handle: LoadedHandle,
+        messages: list[ChatTurn],
+        params: GenerationParams,
+        cancel: CancelToken,
+    ) -> Iterator[str]:
+        payload: dict[str, Any] = {
+            "model": handle.model.ref.name,
+            "messages": [{"role": turn.role, "content": turn.content} for turn in messages],
+            "stream": True,
+            "options": {
+                "temperature": params.temperature,
+                "top_p": params.top_p,
+                "num_predict": params.max_tokens,
+                "num_ctx": _handle_options(handle).n_ctx,
+            },
+        }
+        try:
+            with self._client.stream("POST", "/api/chat", json=payload, timeout=None) as response:
+                if response.status_code != 200:
+                    body = response.read().decode("utf-8", errors="replace")
+                    code = "not_found" if response.status_code == 404 else "load_failed"
+                    raise EngineError(code, body or f"Ollama HTTP {response.status_code}")
+                yield from self._iter_chat_stream(response, cancel)
+        except httpx.RequestError as exc:
+            if cancel.is_set():
+                return
+            raise EngineError("backend_unavailable", f"{_DOWN} ({exc})") from exc
+
+    def _iter_chat_stream(self, response: httpx.Response, cancel: CancelToken) -> Iterator[str]:
+        try:
+            for line in response.iter_lines():
+                if cancel.is_set():
+                    response.close()
+                    return
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise EngineError("load_failed", "Ollama returned invalid JSON") from exc
+                if err := data.get("error"):
+                    raise EngineError("load_failed", str(err))
+                content = (data.get("message") or {}).get("content")
+                if content:
+                    yield content
+                if data.get("done"):
+                    return
+        except (httpx.HTTPError, httpx.StreamError) as exc:
+            if cancel.is_set():
+                return
+            raise EngineError("backend_unavailable", f"{_DOWN} ({exc})") from exc
+
+    def delete(self, model: LocalModel) -> None:
+        try:
+            response = self._client.request(
+                "DELETE",
+                "/api/delete",
+                json={"model": model.ref.name, "name": model.ref.name},
+            )
+        except httpx.RequestError as exc:
+            raise EngineError("backend_unavailable", f"{_DOWN} ({exc})") from exc
+        if response.status_code == 404:
+            raise EngineError("not_found", f"Ollama model not found: {model.ref.name}")
+        if response.status_code != 200:
+            raise EngineError("load_failed", f"Ollama delete returned HTTP {response.status_code}")

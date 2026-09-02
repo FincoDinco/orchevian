@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from llm_engine import config
+from llm_engine.backends.registry import BackendRegistry
+from llm_engine.domain.errors import EngineError
 from llm_engine.logging import setup_logging
 
 
@@ -46,6 +48,20 @@ def _cmd_health(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_models(_args: argparse.Namespace) -> int:
+    try:
+        models, availability = BackendRegistry().list_models()
+    except EngineError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    for name, (ok, reason) in availability.items():
+        if not ok:
+            print(f"{name}: unavailable — {reason or 'unavailable'}", file=sys.stderr)
+    for model in models:
+        print(f"{model.ref.id}\t{model.size_bytes}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -56,6 +72,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "health":
         setup_logging(verbose=args.verbose)
         return _cmd_health(args)
+    if args.command == "models":
+        setup_logging(verbose=args.verbose)
+        return _cmd_models(args)
     return _unimplemented(args.command)
 
 
