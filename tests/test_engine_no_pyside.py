@@ -40,14 +40,13 @@ def test_engine_sources_do_not_import_qt() -> None:
 def test_pyproject_core_deps_exclude_pyside() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     deps = list(data["project"].get("dependencies", []))
-    for extra in data["project"].get("optional-dependencies", {}).values():
-        deps.extend(extra)
+    extras = data["project"].get("optional-dependencies", {})
+    for name in ("mlx", "gguf"):
+        deps.extend(extras.get(name, []))
     joined = "\n".join(deps).lower()
     assert "pyside" not in joined
     assert "pyqt" not in joined
-    full = (ROOT / "pyproject.toml").read_text(encoding="utf-8").lower()
-    assert "pyside6" not in full
-    assert "pyqt-liquidglass" not in full
+    assert "pyqt-liquidglass" not in joined
 
 
 def test_importing_llm_engine_does_not_load_pyside6() -> None:

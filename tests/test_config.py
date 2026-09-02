@@ -104,8 +104,10 @@ def test_save_creates_backend_dirs_and_mode(tmp_path: Path) -> None:
     )
     assert (model_dir / "mlx").is_dir()
     assert (model_dir / "gguf").is_dir()
-    mode = cfg_path.stat().st_mode & 0o777
-    assert mode == 0o600
+    assert cfg_path.is_file()
+    if os.name != "nt":
+        mode = cfg_path.stat().st_mode & 0o777
+        assert mode == 0o600
 
 
 def test_set_and_get(tmp_path: Path) -> None:
@@ -160,6 +162,14 @@ def test_cli_help_exits_zero() -> None:
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
     assert exc.value.code == 0
+
+
+def test_unimplemented_commands_fail_without_writing(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.json"
+    db_path = tmp_path / "data.db"
+    for command in ("chat", "models", "serve", "migrate"):
+        assert main([command, "--config", str(cfg_path), "--db", str(db_path)]) == 1
+    assert not cfg_path.exists()
 
 
 def test_ensure_initialized_writes_defaults(

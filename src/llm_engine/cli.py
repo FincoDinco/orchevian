@@ -32,8 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _unimplemented(command: str) -> int:
-    print(f"llm-engine {command}: not implemented")
-    return 0
+    print(f"llm-engine {command}: not implemented", file=sys.stderr)
+    return 1
 
 
 def _cmd_health(args: argparse.Namespace) -> int:
@@ -53,11 +53,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    setup_logging(verbose=args.verbose)
-    if args.command != "health":
-        config.ensure_initialized(args.config, args.db)
-
     if args.command == "health":
+        setup_logging(verbose=args.verbose)
         return _cmd_health(args)
     return _unimplemented(args.command)
 
