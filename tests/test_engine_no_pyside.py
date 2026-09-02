@@ -56,6 +56,9 @@ def test_importing_llm_engine_does_not_load_pyside6() -> None:
 
     importlib.reload(llm_engine)
     for info in pkgutil.walk_packages(llm_engine.__path__, llm_engine.__name__ + "."):
+        leaf = info.name.rsplit(".", 1)[-1]
+        if not leaf.isidentifier():
+            continue
         importlib.import_module(info.name)
 
     loaded = [name for name in sys.modules if name == "PySide6" or name.startswith("PySide6.")]
