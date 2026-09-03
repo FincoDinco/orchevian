@@ -34,7 +34,9 @@ class ConversationStore(Protocol):
         project_id: int | None | EllipsisType = ...,
         query: str | None = None,
     ) -> list[ConversationSummary]: ...
-    def create_conversation(self, project_id: int | None = None) -> Conversation: ...
+    def create_conversation(
+        self, project_id: int | None = None, model: ModelRef | None = None
+    ) -> Conversation: ...
     def rename(self, id: int, title: str) -> None: ...
     def delete_conversation(self, id: int) -> None: ...
     def move(self, id: int, project_id: int | None) -> None: ...
@@ -225,12 +227,9 @@ class ConversationList(QWidget):
             self.select_id(None)
         self._emit_selection()
 
-    def new_chat(self) -> int:
-        pid = self._project_id
-        if isinstance(pid, int):
-            created = self._library.create_conversation(project_id=pid)
-        else:
-            created = self._library.create_conversation()
+    def new_chat(self, model: ModelRef | None = None) -> int:
+        pid = self._project_id if isinstance(self._project_id, int) else None
+        created = self._library.create_conversation(project_id=pid, model=model)
         cid = created.summary.id
         self._search.blockSignals(True)
         self._search.clear()

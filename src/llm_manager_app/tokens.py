@@ -82,7 +82,8 @@ def qss(palette: StudioPalette) -> str:
     QPushButton#newChatButton, QPushButton#openModelsButton {{
         background-color: transparent; color: {palette.accent}; border: none; padding: 6px 8px;
     }}
-    QLabel#listEmpty, QLabel#chatEmpty, QLabel#modelEmpty, QLabel#lastTurnLabel, QLabel#settingsHint {{
+    QLabel#listEmpty, QLabel#chatEmpty, QLabel#modelEmpty,
+    QLabel#lastTurnLabel, QLabel#settingsHint {{
         color: {palette.secondary}; background: transparent;
     }}
     QToolButton#modelPicker {{ background: transparent; color: {palette.text}; border: none; }}

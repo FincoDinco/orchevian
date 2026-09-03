@@ -1,4 +1,4 @@
-"""QMainWindow three-column shell with streaming chat in column 3."""
+"""QMainWindow three-column shell: chats or models in columns 2/3."""
 
 from __future__ import annotations
 
@@ -6,17 +6,26 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QThread
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QSplitter, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QMainWindow,
+    QSplitter,
+    QStackedWidget,
+    QWidget,
+)
 
 from llm_engine.backends.registry import BackendRegistry
 from llm_engine.config import default_log_path
 from llm_engine.domain.models import ModelRef
+from llm_engine.services.catalog import CatalogService
 from llm_engine.services.chat import ChatService
 from llm_engine.services.session import ModelSession
 from llm_engine.store.library import LibraryService
 from llm_manager_app.tokens import apply_studio
 from llm_manager_app.widgets.chat_view import ChatView
 from llm_manager_app.widgets.conversation_list import ConversationList, ConversationStore
+from llm_manager_app.widgets.models_view import ModelsView
 from llm_manager_app.widgets.settings import (
     APP_NAME,
     KEY_INSPECTOR_OPEN,
@@ -84,6 +93,7 @@ class MainWindow(QMainWindow):
         self._owns_registry = registry is None
         self._registry = registry if registry is not None else BackendRegistry()
         self._session = ModelSession(self._registry)
+        self._catalog_service = CatalogService(self._registry, self._session)
 
         self._store: object | None = None
         if library is None:
@@ -111,11 +121,19 @@ class MainWindow(QMainWindow):
         self._sidebar.section_changed.connect(self._on_section)
         self._sidebar.filter_changed.connect(self._on_filter)
 
-        self._list = ConversationList(splitter, library=self._library)
+        self._list_stack = QStackedWidget(splitter)
+        self._list_stack.setObjectName("listPane")
+        self._list = ConversationList(self._list_stack, library=self._library)
         self._list.selected_id_changed.connect(self._on_selected)
         self._list.chat_created.connect(self._on_chat_created)
+        self._models = ModelsView(self._list_stack, catalog=self._catalog_service)
+        self._models.chat_requested.connect(self._on_chat_with_model)
+        self._list_stack.addWidget(self._list)
+        self._list_stack.addWidget(self._models)
 
-        self._chat_view = ChatView(splitter)
+        self._detail_stack = QStackedWidget(splitter)
+        self._detail_stack.setObjectName("detailPane")
+        self._chat_view = ChatView(self._detail_stack)
         self._chat_view.stop_requested.connect(self._on_stop)
         self._chat_view.turn_finished.connect(self._on_turn_finished)
         self._chat_view.system_prompt_changed.connect(self._on_system_prompt)
@@ -129,6 +147,8 @@ class MainWindow(QMainWindow):
         )
         self._catalog.listed.connect(self._chat_view.set_catalog)
         self._catalog.failed.connect(self._chat_view.on_catalog_failed)
+        self._detail_stack.addWidget(self._chat_view)
+        self._detail_stack.addWidget(self._models.detail)
         if self._worker is not None:
             # Queued: worker lives on a QThread after start_chat_worker.
             self._chat_view.send_requested.connect(self._worker.send)
@@ -144,8 +164,8 @@ class MainWindow(QMainWindow):
             self._worker.unload_failed.connect(self._chat_view.on_unload_failed)
 
         splitter.addWidget(self._sidebar)
-        splitter.addWidget(self._list)
-        splitter.addWidget(self._chat_view)
+        splitter.addWidget(self._list_stack)
+        splitter.addWidget(self._detail_stack)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 0)
         splitter.setStretchFactor(2, 1)
@@ -161,18 +181,7 @@ class MainWindow(QMainWindow):
         self._shortcuts_dialog: ShortcutsDialog | None = None
         self._build_menus()
 
-        self._shortcut_chats = QShortcut(QKeySequence("Ctrl+1"), self)
-        self._shortcut_chats.activated.connect(lambda: self._sidebar.select_section(CHATS))
-        self._shortcut_models = QShortcut(QKeySequence("Ctrl+2"), self)
-        self._shortcut_models.activated.connect(lambda: self._sidebar.select_section(MODELS))
-        self._shortcut_new = QShortcut(QKeySequence.StandardKey.New, self)
-        self._shortcut_new.activated.connect(self._list.new_chat)
-        self._shortcut_new_project = QShortcut(QKeySequence("Ctrl+Shift+N"), self)
-        self._shortcut_new_project.activated.connect(self._sidebar.new_project)
-        self._shortcut_find = QShortcut(QKeySequence.StandardKey.Find, self)
-        self._shortcut_find.activated.connect(self._list.focus_search)
-        self._shortcut_composer = QShortcut(QKeySequence("Ctrl+L"), self)
-        self._shortcut_composer.activated.connect(self._chat_view.focus_composer)
+        # Escape is a QShortcut so dialogs can still consume it; other keys are QActions.
         self._shortcut_stop = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         self._shortcut_stop.activated.connect(self._chat_view.stop)
 
@@ -183,6 +192,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._persist_chrome()
+        self._models.shutdown()
+        models_done = not self._models._thread.isRunning()
         service = self._chat_service
         if service is not None:
             with service._state_lock:
@@ -236,7 +247,7 @@ class MainWindow(QMainWindow):
                 catalog_thread.finished.connect(self._on_catalog_finished)
                 if catalog_thread.isFinished():
                     self._on_catalog_finished()
-        if self._owns_registry and catalog_done:
+        if self._owns_registry and catalog_done and models_done:
             self._registry.close()
             self._owns_registry = False
         store = self._store
@@ -257,20 +268,72 @@ class MainWindow(QMainWindow):
         thread.deleteLater()
 
     def _build_menus(self) -> None:
+        file_menu = self.menuBar().addMenu("&File")
+        view_menu = self.menuBar().addMenu("&View")
+        chat_menu = self.menuBar().addMenu("&Chat")
+        help_menu = self.menuBar().addMenu("&Help")
+
+        new_chat = QAction("New Chat", self)
+        new_chat.setObjectName("newChatAction")
+        new_chat.setShortcut(QKeySequence.StandardKey.New)
+        new_chat.triggered.connect(lambda: self._list.new_chat())
+        file_menu.addAction(new_chat)
+        self._new_chat_action = new_chat
+        self._shortcut_new = new_chat
+
+        new_project = QAction("New Project", self)
+        new_project.setObjectName("newProjectAction")
+        new_project.setShortcut(QKeySequence("Ctrl+Shift+N"))
+        new_project.triggered.connect(lambda: self._sidebar.new_project())
+        file_menu.addAction(new_project)
+        self._shortcut_new_project = new_project
+
+        file_menu.addSeparator()
+
         settings_act = QAction("Settings…", self)
         settings_act.setObjectName("settingsAction")
         settings_act.setShortcut(QKeySequence.StandardKey.Preferences)
         settings_act.setMenuRole(QAction.MenuRole.PreferencesRole)
         settings_act.triggered.connect(self._open_settings)
+        file_menu.addAction(settings_act)
         self._settings_action = settings_act
+
+        chats_act = QAction("Chats", self)
+        chats_act.setObjectName("chatsAction")
+        chats_act.setShortcut(QKeySequence("Ctrl+1"))
+        chats_act.triggered.connect(lambda: self._sidebar.select_section(CHATS))
+        view_menu.addAction(chats_act)
+        self._shortcut_chats = chats_act
+
+        models_act = QAction("Models", self)
+        models_act.setObjectName("modelsAction")
+        models_act.setShortcut(QKeySequence("Ctrl+2"))
+        models_act.triggered.connect(lambda: self._sidebar.select_section(MODELS))
+        view_menu.addAction(models_act)
+        self._shortcut_models = models_act
+
+        find_act = QAction("Find", self)
+        find_act.setObjectName("findAction")
+        find_act.setShortcut(QKeySequence.StandardKey.Find)
+        find_act.triggered.connect(self._list.focus_search)
+        view_menu.addAction(find_act)
+        self._shortcut_find = find_act
+
+        delete_act = QAction("Delete Conversation", self)
+        delete_act.setObjectName("deleteConversationAction")
+        delete_act.triggered.connect(self._delete_conversation)
+        view_menu.addAction(delete_act)
+
+        composer_act = QAction("Focus Composer", self)
+        composer_act.setObjectName("focusComposerAction")
+        composer_act.setShortcut(QKeySequence("Ctrl+L"))
+        composer_act.triggered.connect(self._chat_view.focus_composer)
+        chat_menu.addAction(composer_act)
+        self._shortcut_composer = composer_act
 
         shortcuts_act = QAction("Keyboard Shortcuts", self)
         shortcuts_act.setObjectName("shortcutsAction")
         shortcuts_act.triggered.connect(self._open_shortcuts)
-
-        file_menu = self.menuBar().addMenu("&File")
-        file_menu.addAction(settings_act)
-        help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(shortcuts_act)
 
     def _restore_chrome(self) -> None:
@@ -302,6 +365,7 @@ class MainWindow(QMainWindow):
             )
             self._settings_dialog.appearance_changed.connect(self._on_appearance)
             self._settings_dialog.return_sends_changed.connect(self._chat_view.set_return_sends)
+            self._settings_dialog.rescan_requested.connect(self._models.refresh)
         self._settings_dialog.reload()
         self._settings_dialog.show()
         self._settings_dialog.raise_()
@@ -329,7 +393,24 @@ class MainWindow(QMainWindow):
     def _on_section(self, key: str) -> None:
         if key == MODELS:
             self._list.set_project_filter(...)
+            self._list_stack.setCurrentWidget(self._models)
+            self._detail_stack.setCurrentWidget(self._models.detail)
+            self._models.refresh()
+        else:
+            self._list_stack.setCurrentWidget(self._list)
+            self._detail_stack.setCurrentWidget(self._chat_view)
         self._sync_title()
+
+    def _on_chat_with_model(self, ref: object) -> None:
+        if isinstance(ref, ModelRef):
+            self._list.new_chat(model=ref)
+            return
+        self._sidebar.select_section(CHATS)
+
+    def _delete_conversation(self) -> None:
+        if self._sidebar.current_section() != CHATS:
+            return
+        self._list.delete_selected()
 
     def _on_filter(self, selection: object) -> None:
         if not isinstance(selection, SidebarSelection):

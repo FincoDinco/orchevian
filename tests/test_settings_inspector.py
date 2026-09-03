@@ -380,8 +380,8 @@ def test_inspector_unload_offer_after_timeout(tmp_path: Path) -> None:
         app.processEvents()
         inspector = window._chat_view.inspector()
         inspector.set_unload_offer_ms(20)
-        unload = window.findChild(QPushButton, "unloadButton")
-        restart = window.findChild(QPushButton, "restartButton")
+        unload = inspector.findChild(QPushButton, "unloadButton")
+        restart = inspector.findChild(QPushButton, "restartButton")
         assert unload is not None and restart is not None
         assert unload.isHidden()
         window._chat_view.composer().set_text("hang")
@@ -524,8 +524,8 @@ def test_restart_shows_error_banner(tmp_path: Path) -> None:
         window._chat_view.composer().set_text("hang")
         window._chat_view.composer().submit()
         assert probe.entered.wait(2.0)
-        unload = window.findChild(QPushButton, "unloadButton")
-        restart = window.findChild(QPushButton, "restartButton")
+        unload = inspector.findChild(QPushButton, "unloadButton")
+        restart = inspector.findChild(QPushButton, "restartButton")
         _wait_until(lambda: unload is not None and unload.isVisible(), message="no unload")
         assert unload is not None and restart is not None
         unload.click()
@@ -564,7 +564,7 @@ def test_force_unload_when_generate_ignores_cancel(tmp_path: Path) -> None:
         window._chat_view.composer().set_text("stuck")
         window._chat_view.composer().submit()
         assert probe.entered.wait(2.0)
-        unload = window.findChild(QPushButton, "unloadButton")
+        unload = window._chat_view.inspector().findChild(QPushButton, "unloadButton")
         _wait_until(lambda: unload is not None and unload.isVisible(), message="no unload offer")
         assert unload is not None
         unload.click()
@@ -598,7 +598,7 @@ def test_unload_during_load_keeps_gui_busy(tmp_path: Path) -> None:
         window._chat_view.composer().set_text("load me")
         window._chat_view.composer().submit()
         _wait_until(lambda: bool(probe.load_calls), message="load never started")
-        unload = window.findChild(QPushButton, "unloadButton")
+        unload = window._chat_view.inspector().findChild(QPushButton, "unloadButton")
         _wait_until(lambda: unload is not None and unload.isVisible(), message="no unload offer")
         assert unload is not None
         unload.click()

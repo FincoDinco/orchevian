@@ -73,6 +73,9 @@ def test_studio_qss_is_small_and_uses_named_colors() -> None:
     assert len(sheet.splitlines()) < 80
     assert DARK.canvas in sheet
     assert DARK.selection in sheet
+    assert DARK.danger in sheet
+    assert "modelsError" in sheet
+    assert "modelsBanner" in sheet
     assert "border-left" not in sheet
     assert "border-right" not in sheet
     assert "QSplitter::handle" in sheet
@@ -122,7 +125,7 @@ def test_main_window_three_column_splitter(tmp_path: Path) -> None:
         pytest.skip(f"no display: {exc}")
 
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QLabel, QListView, QSplitter
+    from PySide6.QtWidgets import QLabel, QListView, QSplitter, QStackedWidget
 
     from llm_manager_app.widgets.chat_view import ChatView
     from llm_manager_app.widgets.conversation_list import ConversationList
@@ -142,12 +145,14 @@ def test_main_window_three_column_splitter(tmp_path: Path) -> None:
         list_pane = splitter.widget(1)
         detail = splitter.widget(2)
         assert isinstance(sidebar, Sidebar)
-        assert isinstance(list_pane, ConversationList)
+        assert isinstance(list_pane, QStackedWidget)
+        assert isinstance(list_pane.currentWidget(), ConversationList)
         view = list_pane.findChild(QListView, "conversationView")
         assert view is not None
         model = view.model()
         assert model is not None and model.rowCount() == 0
-        assert isinstance(detail, ChatView)
+        assert isinstance(detail, QStackedWidget)
+        assert isinstance(detail.currentWidget(), ChatView)
         empty = detail.findChild(QLabel, "chatEmpty")
         assert empty is not None
         assert "Select a conversation" in empty.text()
@@ -299,7 +304,7 @@ def test_conversation_crud_search_rename_delete_and_empty(tmp_path: Path) -> Non
     except Exception as exc:
         pytest.skip(f"no display: {exc}")
 
-    from PySide6.QtGui import QKeySequence, QShortcut
+    from PySide6.QtGui import QAction, QKeySequence
     from PySide6.QtWidgets import QLabel, QLineEdit, QListView
 
     window, store, library = _window(tmp_path)
@@ -347,11 +352,19 @@ def test_conversation_crud_search_rename_delete_and_empty(tmp_path: Path) -> Non
         assert "No conversations" in empty.text()
         assert window.windowTitle() == "LLM Manager"
 
-        shortcuts = window.findChildren(QShortcut)
-        keys = [s.key() for s in shortcuts]
+        actions = window.findChildren(QAction)
+        keys = [a.shortcut() for a in actions]
         assert any(k.matches(QKeySequence(QKeySequence.StandardKey.New)) for k in keys)
         assert any(k.matches(QKeySequence(QKeySequence.StandardKey.Find)) for k in keys)
         assert any(k.matches(QKeySequence("Ctrl+Shift+N")) for k in keys)
+        assert any(k.matches(QKeySequence("Ctrl+1")) for k in keys)
+        assert any(k.matches(QKeySequence("Ctrl+2")) for k in keys)
+        assert any(k.matches(QKeySequence("Ctrl+L")) for k in keys)
+        action_titles = {a.text().replace("&", "") for a in actions}
+        assert "New Chat" in action_titles
+        assert "New Project" in action_titles
+        assert "Models" in action_titles
+        assert "Delete Conversation" in action_titles
     finally:
         window.close()
         if store is not None:
@@ -370,7 +383,7 @@ def test_new_chat_shortcut_switches_to_chats(tmp_path: Path) -> None:
     try:
         window._sidebar.select_section(MODELS)
         assert window.windowTitle() == "Models — LLM Manager"
-        window._shortcut_new.activated.emit()
+        window._new_chat_action.trigger()
         assert window._sidebar.current_section() == "chats"
         assert window._list.selected_title() == "New Chat"
         assert window.windowTitle() == "New Chat"
@@ -656,7 +669,7 @@ def test_new_chat_from_models_does_not_seed_last_project(tmp_path: Path) -> None
             model=ModelRef(BackendName.OLLAMA, "qwen3:8b"),
         )
         window._sidebar.select_section(MODELS)
-        window._shortcut_new.activated.emit()
+        window._new_chat_action.trigger()
         cid = window._list.selected_id()
         assert cid is not None
         loaded = library.get_conversation(cid)
