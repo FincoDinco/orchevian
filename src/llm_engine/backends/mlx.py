@@ -148,8 +148,20 @@ class MLXBackend:
             runtime=(weights, tokenizer),
         )
 
-    def unload(self, _handle: LoadedHandle) -> None:
-        return
+    def unload(self, handle: LoadedHandle) -> None:
+        runtime = getattr(handle, "runtime", None)
+        del runtime
+        try:
+            import mlx.core as mx
+        except ImportError:
+            return
+        clearer = getattr(mx, "clear_cache", None)
+        if callable(clearer):
+            clearer()
+        metal = getattr(mx, "metal", None)
+        metal_clear = getattr(metal, "clear_cache", None)
+        if callable(metal_clear):
+            metal_clear()
 
     def stream_generate(
         self,

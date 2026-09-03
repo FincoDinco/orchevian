@@ -48,7 +48,8 @@ class ModelSession:
         self._conversation_id: int | None = None
 
     def status(self) -> SessionStatus:
-        loaded = self._handle.model if self._handle is not None else None
+        handle = self._handle
+        loaded = handle.model if handle is not None else None
         return SessionStatus(
             loaded=loaded,
             generating=self._generating,
@@ -65,33 +66,33 @@ class ModelSession:
         opts = options if options is not None else LoadOptions()
         if not self._lock.acquire(blocking=False):
             raise EngineError("generating", "generation already in progress")
+        self._generating = True
         try:
-            if self._generating:
-                raise EngineError("generating", "generation already in progress")
             if (
                 self._handle is not None
                 and self._handle.model.ref == ref
                 and _handle_options(self._handle).n_ctx == opts.n_ctx
             ):
                 return self._handle.model
-            self._unload_locked()
             backend = self._registry.get(str(ref.backend))
             model = self._resolve(backend, ref)
+            self._unload_locked()
             self._handle = backend.load(model, opts)
             self._backend = backend
             _log.info("loaded %s n_ctx=%s", ref.id, opts.n_ctx)
             return self._handle.model
         finally:
+            self._generating = False
             self._lock.release()
 
     def unload(self) -> None:
         if not self._lock.acquire(blocking=False):
             raise EngineError("generating", "generation already in progress")
+        self._generating = True
         try:
-            if self._generating:
-                raise EngineError("generating", "generation already in progress")
             self._unload_locked()
         finally:
+            self._generating = False
             self._lock.release()
 
     def generate(
@@ -100,16 +101,17 @@ class ModelSession:
         params: GenerationParams,
         cancel: CancelToken,
     ) -> Iterator[str]:
-        if self._handle is None or self._backend is None:
-            raise EngineError("no_model", "no model loaded")
         if not self._lock.acquire(blocking=False):
             raise EngineError("generating", "generation already in progress")
-        if self._generating:
+        try:
+            if self._handle is None or self._backend is None:
+                raise EngineError("no_model", "no model loaded")
+            self._generating = True
+            handle = self._handle
+            backend = self._backend
+        except BaseException:
             self._lock.release()
-            raise EngineError("generating", "generation already in progress")
-        self._generating = True
-        handle = self._handle
-        backend = self._backend
+            raise
 
         def _stream() -> Iterator[str]:
             try:

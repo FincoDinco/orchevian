@@ -48,22 +48,24 @@ def _cmd_health(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_models(_args: argparse.Namespace) -> int:
-    registry = BackendRegistry()
+def _cmd_models(args: argparse.Namespace) -> int:
+    registry: BackendRegistry | None = None
     try:
-        try:
-            models, availability = registry.list_models()
-        except EngineError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-        for name, (ok, reason) in availability.items():
-            if not ok:
-                print(f"{name}: unavailable — {reason or 'unavailable'}", file=sys.stderr)
-        for model in models:
-            print(f"{model.ref.id}\t{model.size_bytes}")
-        return 0
+        cfg = config.load(args.config, args.db)
+        registry = BackendRegistry(cfg=cfg)
+        models, availability = registry.list_models()
+    except EngineError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     finally:
-        registry.close()
+        if registry is not None:
+            registry.close()
+    for name, (ok, reason) in availability.items():
+        if not ok:
+            print(f"{name}: unavailable — {reason or 'unavailable'}", file=sys.stderr)
+    for model in models:
+        print(f"{model.ref.id}\t{model.size_bytes}")
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

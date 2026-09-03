@@ -52,7 +52,9 @@ def _module_level_roots(path: Path) -> set[str]:
 
 def test_mlx_and_gguf_sources_do_not_import_extras_at_module_level() -> None:
     src = ROOT / "src" / "llm_engine" / "backends"
-    assert "mlx_lm" not in _module_level_roots(src / "mlx.py")
+    mlx_roots = _module_level_roots(src / "mlx.py")
+    assert "mlx_lm" not in mlx_roots
+    assert "mlx" not in mlx_roots
     assert "llama_cpp" not in _module_level_roots(src / "gguf.py")
 
 
@@ -95,11 +97,15 @@ def test_load_different_n_ctx_unloads_first() -> None:
 
 
 def test_generate_without_load_raises() -> None:
-    session, _fake = _session(_model(BackendName.OLLAMA, "fake"))
+    model = _model(BackendName.OLLAMA, "fake")
+    session, _fake = _session(model)
     with pytest.raises(EngineError) as exc:
         session.generate([ChatTurn("user", "hi")], GenerationParams(), threading.Event())
     assert exc.value.code == "no_model"
     assert session.status().loaded is None
+    assert session.status().generating is False
+    session.load(model.ref)
+    assert session.status().loaded is not None
 
 
 def test_generate_streams_from_loaded_backend() -> None:
@@ -119,6 +125,31 @@ def test_unknown_ref_raises_not_found() -> None:
         session.load(ModelRef(BackendName.OLLAMA, "missing"))
     assert exc.value.code == "not_found"
     assert fake.load_calls == []
+
+
+def test_failed_switch_keeps_loaded_model() -> None:
+    current = _model(BackendName.OLLAMA, "one")
+    session, fake = _session(current)
+    session.load(current.ref)
+    with pytest.raises(EngineError) as exc:
+        session.load(ModelRef(BackendName.OLLAMA, "missing"))
+    assert exc.value.code == "not_found"
+    assert session.status().loaded is not None
+    assert session.status().loaded.ref == current.ref
+    assert fake.unload_calls == []
+    assert len(fake.load_calls) == 1
+
+
+def test_unknown_backend_switch_keeps_loaded_model() -> None:
+    current = _model(BackendName.OLLAMA, "one")
+    session, fake = _session(current)
+    session.load(current.ref)
+    with pytest.raises(EngineError) as exc:
+        session.load(ModelRef(BackendName.MLX, "qwen"))
+    assert exc.value.code == "not_found"
+    assert session.status().loaded is not None
+    assert session.status().loaded.ref == current.ref
+    assert fake.unload_calls == []
 
 
 def test_unload_clears_loaded_handle() -> None:
@@ -153,6 +184,43 @@ def test_load_unload_generate_while_generating_raise() -> None:
     gate.set()
     assert list(gen) == ["two"]
     assert session.status().generating is False
+
+
+def test_status_generating_during_load() -> None:
+    model = _model(BackendName.OLLAMA, "fake")
+    gate = threading.Event()
+    fake = FakeBackend(models=[model], block_load=gate)
+    session = ModelSession(BackendRegistry([fake]))
+    done = threading.Event()
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            session.load(model.ref)
+        except BaseException as exc:
+            errors.append(exc)
+        done.set()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    generating = False
+    for _ in range(50):
+        if session.status().generating:
+            generating = True
+            break
+        if done.is_set():
+            break
+        done.wait(timeout=0.02)
+    assert generating is True
+    with pytest.raises(EngineError) as exc:
+        session.load(model.ref)
+    assert exc.value.code == "generating"
+    gate.set()
+    assert done.wait(timeout=2)
+    thread.join(timeout=2)
+    assert errors == []
+    assert session.status().generating is False
+    assert session.status().loaded is not None
 
 
 def test_status_defaults() -> None:
@@ -254,6 +322,27 @@ def test_mlx_load_imports_inside_load(tmp_path: Path, monkeypatch: pytest.Monkey
         )
     )
     assert chunks == ["hi"]
+    backend.unload(handle)
+
+
+def test_mlx_unload_clears_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    from llm_engine.backends.mlx import MLXBackend
+    from llm_engine.backends.protocol import ModelHandle
+
+    cleared: list[str] = []
+    mlx = types.ModuleType("mlx")
+    mlx_core = types.ModuleType("mlx.core")
+    mlx_core.clear_cache = lambda: cleared.append("core")
+    mlx_core.metal = SimpleNamespace(clear_cache=lambda: cleared.append("metal"))
+    mlx.core = mlx_core
+    monkeypatch.setitem(sys.modules, "mlx", mlx)
+    monkeypatch.setitem(sys.modules, "mlx.core", mlx_core)
+    handle = ModelHandle(
+        model=_model(BackendName.MLX, "qwen"),
+        runtime=("WEIGHTS", "TOKENIZER"),
+    )
+    MLXBackend().unload(handle)
+    assert cleared == ["core", "metal"]
 
 
 def test_gguf_is_available_false_when_extra_missing(monkeypatch: pytest.MonkeyPatch) -> None:

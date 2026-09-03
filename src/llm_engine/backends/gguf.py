@@ -87,7 +87,6 @@ class GGUFBackend:
         except ImportError as exc:
             raise EngineError("backend_unavailable", _UNAVAILABLE) from exc
         try:
-            # n_ctx is a load-time window (default 8192), not GenerationParams.max_tokens.
             llama = Llama(model_path=str(path), n_ctx=opts.n_ctx, verbose=False)
         except EngineError:
             raise

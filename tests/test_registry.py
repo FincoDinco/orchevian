@@ -11,6 +11,7 @@ from llm_engine.backends.mlx import MLXBackend
 from llm_engine.backends.ollama import OllamaBackend
 from llm_engine.backends.registry import BackendRegistry, default_backends
 from llm_engine.cli import main
+from llm_engine.config import EngineConfig
 from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import (
     BackendName,
@@ -87,6 +88,37 @@ def test_env_flag_registers_fake_instead_of_ollama(monkeypatch: pytest.MonkeyPat
     backends = default_backends()
     assert len(backends) == 1
     assert isinstance(backends[0], FakeBackend)
+
+
+def test_default_backends_uses_config_model_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LLM_ENGINE_FAKE_BACKEND", raising=False)
+    model_dir = tmp_path / "weights"
+    cfg = EngineConfig(model_dir=model_dir, api_port=8080)
+    backends = default_backends(cfg)
+    try:
+        assert isinstance(backends[1], MLXBackend)
+        assert isinstance(backends[2], GGUFBackend)
+        assert backends[1]._model_dir == model_dir / "mlx"
+        assert backends[2]._model_dir == model_dir / "gguf"
+    finally:
+        for backend in backends:
+            closer = getattr(backend, "close", None)
+            if callable(closer):
+                closer()
+
+
+def test_default_backends_does_not_swallow_config_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LLM_ENGINE_FAKE_BACKEND", raising=False)
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text('{"model_dir": "/tmp/models", "api_port": 0}\n', encoding="utf-8")
+    monkeypatch.setenv("LLM_ENGINE_CONFIG", str(cfg_path))
+    with pytest.raises(EngineError) as exc:
+        default_backends()
+    assert exc.value.code == "config_invalid"
 
 
 def test_unavailable_backend_surfaces_reason_not_empty_list() -> None:
@@ -223,7 +255,7 @@ def test_cli_models_prints_availability(
     monkeypatch.setattr("llm_engine.cli.setup_logging", lambda **_kwargs: None)
     monkeypatch.setattr(
         "llm_engine.cli.BackendRegistry",
-        lambda: BackendRegistry(
+        lambda *args, cfg=None, **kwargs: BackendRegistry(
             [
                 FakeBackend(
                     available=False,
@@ -249,7 +281,7 @@ def test_cli_models_lists_fake(
     monkeypatch.setattr("llm_engine.cli.setup_logging", lambda **_kwargs: None)
     monkeypatch.setattr(
         "llm_engine.cli.BackendRegistry",
-        lambda: BackendRegistry(
+        lambda *args, cfg=None, **kwargs: BackendRegistry(
             [FakeBackend(models=[_model(BackendName.OLLAMA, "qwen3:8b")])]
         ),
     )
@@ -257,6 +289,17 @@ def test_cli_models_lists_fake(
     captured = capsys.readouterr()
     assert "ollama/qwen3:8b" in captured.out
     assert captured.err == ""
+
+
+def test_cli_models_invalid_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("llm_engine.cli.setup_logging", lambda **_kwargs: None)
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"model_dir": "/tmp/models", "api_port": 0}\n', encoding="utf-8")
+    assert main(["models", "--config", str(cfg)]) == 1
+    captured = capsys.readouterr()
+    assert "error:" in captured.err
 
 
 def test_registry_close_closes_owned_ollama(monkeypatch: pytest.MonkeyPatch) -> None:

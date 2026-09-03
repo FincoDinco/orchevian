@@ -16,15 +16,12 @@ from llm_engine.domain.models import LocalModel
 _FAKE_ENV = "LLM_ENGINE_FAKE_BACKEND"
 
 
-def default_backends() -> list[InferenceBackend]:
+def default_backends(cfg: config.EngineConfig | None = None) -> list[InferenceBackend]:
     if os.environ.get(_FAKE_ENV):
         from llm_engine.backends.fake import FakeBackend
 
         return [FakeBackend()]
-    try:
-        model_dir = config.load().model_dir
-    except EngineError:
-        model_dir = config.default_model_dir()
+    model_dir = (cfg if cfg is not None else config.load()).model_dir
     return [
         OllamaBackend(),
         MLXBackend(model_dir / "mlx"),
@@ -33,8 +30,15 @@ def default_backends() -> list[InferenceBackend]:
 
 
 class BackendRegistry:
-    def __init__(self, backends: Sequence[InferenceBackend] | None = None) -> None:
-        self._backends = list(backends if backends is not None else default_backends())
+    def __init__(
+        self,
+        backends: Sequence[InferenceBackend] | None = None,
+        *,
+        cfg: config.EngineConfig | None = None,
+    ) -> None:
+        self._backends = list(
+            backends if backends is not None else default_backends(cfg)
+        )
 
     def backends(self) -> tuple[InferenceBackend, ...]:
         return tuple(self._backends)
