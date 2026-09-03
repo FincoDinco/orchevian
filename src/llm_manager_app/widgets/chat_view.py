@@ -211,6 +211,10 @@ class ChatView(QWidget):
             self._banner.clear()
         self._sync_enabled()
 
+    def _sync_session_busy_banner(self) -> None:
+        if self._session_busy:
+            self.show_banner(self._session_busy_copy)
+
     def set_catalog(self, models: object, availability: object) -> None:
         model_list: list[LocalModel] = []
         if isinstance(models, list):
@@ -260,10 +264,12 @@ class ChatView(QWidget):
             self._inspector.set_conversation(conversation)
             self._inspector.set_generating(True)
             self._sync_enabled()
+            self._sync_session_busy_banner()
             return
         if self.keeping_error_buffer(cid) and self._cid == cid:
             self._stack.setCurrentWidget(self._chat_split)
             self._sync_enabled()
+            self._sync_session_busy_banner()
             return
         self._cid = cid
         self._error_plain_id = None
@@ -281,6 +287,7 @@ class ChatView(QWidget):
             self._banner.show()
         else:
             self._banner.hide()
+        self._sync_session_busy_banner()
         self._sync_enabled()
 
     def focus_composer(self) -> None:

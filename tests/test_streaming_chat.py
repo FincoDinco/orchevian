@@ -479,6 +479,35 @@ def test_rejected_does_not_restore_composer_on_other_conversation() -> None:
     view.close()
 
 
+def test_session_busy_banner_survives_set_conversation() -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QPushButton
+
+    from llm_manager_app.widgets.chat_view import ChatView
+
+    view = ChatView()
+    try:
+        view.show()
+        app.processEvents()
+        view.set_conversation(_conv(1, "Alpha", REF))
+        view.set_catalog([LOCAL], {"ollama": (True, None)})
+        view.set_session_busy(True)
+        assert "loading or generating" in view.banner_text()
+        send = view.findChild(QPushButton, "sendButton")
+        assert send is not None and not send.isEnabled()
+        view.set_conversation(_conv(2, "Beta", REF))
+        assert "loading or generating" in view.banner_text()
+        assert send is not None and not send.isEnabled()
+        view.set_session_busy(False)
+        assert view.banner_text() == ""
+    finally:
+        view.close()
+
+
 def test_transcript_scrolls_to_end_after_html() -> None:
     try:
         app = _qapp()
