@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
 )
 
 from llm_engine.backends.registry import BackendRegistry
-from llm_engine.domain.errors import EngineError
 from llm_engine.services.session import ModelSession
 from llm_manager_app.tokens import apply_studio
 from llm_manager_app.widgets.sidebar import CHATS, MODELS, Sidebar
@@ -23,24 +22,14 @@ from llm_manager_app.widgets.sidebar import CHATS, MODELS, Sidebar
 _TITLE = "LLM Manager"
 
 
-def _status_text(registry: BackendRegistry, session: ModelSession) -> str:
+def _status_text(session: ModelSession) -> str:
+    # Session status only — list_models() is catalog I/O (Ollama HTTP / disk scan).
     status = session.status()
     loaded = status.loaded.ref.id if status.loaded is not None else "none"
-    lines = [
-        f"loaded: {loaded}",
-        f"generating: {'yes' if status.generating else 'no'}",
-    ]
-    try:
-        _models, availability = registry.list_models()
-    except EngineError as exc:
-        lines.append(f"registry: {exc}")
-        return "\n".join(lines)
-    for name, (ok, reason) in availability.items():
-        if ok:
-            lines.append(f"{name}: available")
-        else:
-            lines.append(f"{name}: unavailable — {reason or 'unavailable'}")
-    return "\n".join(lines)
+    return (
+        f"loaded: {loaded}\n"
+        f"generating: {'yes' if status.generating else 'no'}"
+    )
 
 
 class MainWindow(QMainWindow):
@@ -83,7 +72,7 @@ class MainWindow(QMainWindow):
         self._detail.setTextFormat(Qt.TextFormat.PlainText)
         self._detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._detail.setContentsMargins(8, 8, 8, 8)
-        self._detail.setText(_status_text(self._registry, self._session))
+        self._detail.setText(_status_text(self._session))
 
         splitter.addWidget(self._sidebar)
         splitter.addWidget(self._list)

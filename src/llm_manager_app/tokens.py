@@ -82,8 +82,6 @@ def qss(palette: StudioPalette) -> str:
         background-color: {palette.canvas};
         color: {palette.text};
         border: none;
-        border-left: 1px solid {palette.separator};
-        border-right: 1px solid {palette.separator};
     }}
     QWidget#detailPane, QLabel#detailPane {{
         background-color: {palette.canvas};

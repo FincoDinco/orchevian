@@ -73,6 +73,9 @@ def test_studio_qss_is_small_and_uses_named_colors() -> None:
     assert len(sheet.splitlines()) < 80
     assert DARK.canvas in sheet
     assert DARK.selection in sheet
+    assert "border-left" not in sheet
+    assert "border-right" not in sheet
+    assert "QSplitter::handle" in sheet
     assert "brass" not in sheet.lower()
     assert "liquid" not in sheet.lower()
     assert "NSVisualEffectView" not in sheet
@@ -101,7 +104,11 @@ def test_main_window_three_column_splitter() -> None:
     from llm_manager_app.main_window import MainWindow
     from llm_manager_app.widgets.sidebar import Sidebar
 
-    registry = BackendRegistry([FakeBackend()])
+    class _NoList(FakeBackend):
+        def list_models(self):
+            raise AssertionError("list_models must not run at window startup")
+
+    registry = BackendRegistry([_NoList()])
     window = MainWindow(registry=registry)
     try:
         splitter = window.findChild(QSplitter)
@@ -117,7 +124,7 @@ def test_main_window_three_column_splitter() -> None:
         assert isinstance(detail, QLabel)
         text = detail.text()
         assert "loaded: none" in text
-        assert "ollama:" in text
+        assert "generating: no" in text
         assert window.windowTitle() == "LLM Manager"
         assert window.minimumWidth() >= 1024
         assert window.minimumHeight() >= 680
@@ -150,11 +157,10 @@ def test_sidebar_chats_and_models() -> None:
         window.close()
 
 
-def test_importing_app_does_not_load_sqlite3() -> None:
+def test_importing_app_does_not_load_banned_modules() -> None:
     pytest.importorskip("PySide6")
-    banned = ("mlx_lm", "llama_cpp", "fastapi", "huggingface_hub")
+    banned = ("sqlite3", "mlx_lm", "llama_cpp", "fastapi", "huggingface_hub")
     before = {name for name in banned if name in sys.modules}
-    # sqlite3 may already be loaded by engine tests; GUI import must not add mlx_lm etc.
     import llm_manager_app.main_window as app_main
 
     loaded = [name for name in banned if name in sys.modules and name not in before]
