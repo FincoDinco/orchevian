@@ -58,6 +58,19 @@ def test_mlx_and_gguf_sources_do_not_import_extras_at_module_level() -> None:
     assert "llama_cpp" not in _module_level_roots(src / "gguf.py")
 
 
+def test_load_invokes_on_progress() -> None:
+    model = _model(BackendName.OLLAMA, "fake")
+    session, fake = _session(model)
+    seen: list[float] = []
+    loaded = session.load(model.ref, on_progress=seen.append)
+    assert loaded.ref == model.ref
+    assert seen == [0.0, 1.0]
+    seen.clear()
+    session.load(model.ref, on_progress=seen.append)
+    assert seen == [1.0]
+    assert len(fake.load_calls) == 1
+
+
 def test_load_same_ref_and_n_ctx_is_noop() -> None:
     model = _model(BackendName.OLLAMA, "fake")
     session, fake = _session(model)

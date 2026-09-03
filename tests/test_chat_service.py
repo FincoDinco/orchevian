@@ -423,6 +423,81 @@ def test_send_returns_before_generation_finishes(library: LibraryService) -> Non
     assert loaded.messages[-1].content == "Hello world"
 
 
+def test_flush_callback_error_releases_lock_and_emits_error(library: LibraryService) -> None:
+    rec = Recorder()
+
+    def boom(conversation_id: int, text: str) -> None:
+        rec.on_token(conversation_id, text)
+        raise RuntimeError("flush failed")
+
+    fake = RecordingFake(models=[LOCAL], chunks=("Hello", " world"))
+    session = ModelSession(BackendRegistry([fake]))
+    chat = ChatService(
+        library,
+        session,
+        on_token=boom,
+        on_done=rec.on_done,
+        on_error=rec.on_error,
+    )
+    cid = _new_chat(library)
+    chat.send(cid, "hello")
+    _wait(rec, chat)
+    assert rec.errors
+    assert rec.errors[0].code == "backend_unavailable"
+    assert rec.dones == []
+    assert rec.events[0] == "token"
+    assert rec.events[-1] == "error"
+    assert session.status().generating is False
+    loaded = library.get_conversation(cid)
+    assert loaded.messages[-1].role == "assistant"
+    assert loaded.messages[-1].content == "Hello world"
+
+    rec.terminal.clear()
+    rec.errors.clear()
+    rec.dones.clear()
+    rec.events.clear()
+    rec.tokens.clear()
+    chat.on_token = rec.on_token
+    chat.send(cid, "again")
+    _wait(rec, chat)
+    assert rec.dones
+    assert rec.errors == []
+
+
+def test_load_progress_fires_with_conversation_id(library: LibraryService) -> None:
+    gate = threading.Event()
+    rec = Recorder()
+    progress: list[tuple[int, tuple[object, ...]]] = []
+    seen = threading.Event()
+
+    def on_progress(conversation_id: int, *args: object, **kwargs: object) -> None:
+        del kwargs
+        progress.append((conversation_id, args))
+        seen.set()
+
+    fake = RecordingFake(models=[LOCAL], chunks=("Hello",), block_load=gate)
+    session = ModelSession(BackendRegistry([fake]))
+    chat = ChatService(
+        library,
+        session,
+        on_token=rec.on_token,
+        on_done=rec.on_done,
+        on_error=rec.on_error,
+        on_load_progress=on_progress,
+    )
+    cid = _new_chat(library)
+    chat.send(cid, "hello")
+    assert seen.wait(timeout=2)
+    assert progress
+    assert progress[0][0] == cid
+    assert progress[0][1] == (0.0,)
+    _wait_until(lambda: len(fake.load_calls) > 0)
+    gate.set()
+    _wait(rec, chat)
+    assert rec.dones
+    assert (cid, (1.0,)) in progress
+
+
 def test_success_coalesces_tokens_and_never_emits_error(library: LibraryService) -> None:
     chat, rec, fake, _session = _harness(library)
     cid = _new_chat(library)

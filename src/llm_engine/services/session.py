@@ -62,7 +62,6 @@ class ModelSession:
         options: LoadOptions | None = None,
         on_progress: Callable[..., object] | None = None,
     ) -> LocalModel:
-        del on_progress
         opts = options if options is not None else LoadOptions()
         if not self._lock.acquire(blocking=False):
             raise EngineError("generating", "generation already in progress")
@@ -73,12 +72,18 @@ class ModelSession:
                 and self._handle.model.ref == ref
                 and _handle_options(self._handle).n_ctx == opts.n_ctx
             ):
+                if on_progress is not None:
+                    on_progress(1.0)
                 return self._handle.model
             backend = self._registry.get(str(ref.backend))
             model = self._resolve(backend, ref)
             self._unload_locked()
+            if on_progress is not None:
+                on_progress(0.0)
             self._handle = backend.load(model, opts)
             self._backend = backend
+            if on_progress is not None:
+                on_progress(1.0)
             _log.info("loaded %s n_ctx=%s", ref.id, opts.n_ctx)
             return self._handle.model
         finally:
