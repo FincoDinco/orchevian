@@ -191,6 +191,7 @@ def test_stream_generate_yields_deltas_and_sends_num_ctx(
     assert isinstance(body, dict)
     assert body["model"] == "qwen3:8b"
     assert body["stream"] is True
+    assert body["think"] is False
     options = body["options"]
     assert isinstance(options, dict)
     assert options["num_ctx"] == 8192
@@ -231,6 +232,97 @@ def test_stream_generate_honors_cancel_and_closes_response(
         cancel.set()
     assert chunks == ["one"]
     assert closed.is_set()
+
+
+def test_stream_generate_cancel_closes_blocked_read(
+    make_backend: Callable[[Handler], OllamaBackend],
+) -> None:
+    class HangAfterFirst(httpx.SyncByteStream):
+        def __init__(self) -> None:
+            self._gate = threading.Event()
+
+        def __iter__(self) -> Iterator[bytes]:
+            yield b'{"message":{"content":"one"},"done":false}\n'
+            self._gate.wait(timeout=5.0)
+
+        def close(self) -> None:
+            self._gate.set()
+
+    stream = HangAfterFirst()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream)
+
+    backend = make_backend(handler)
+    handle = backend.load(_model())
+    cancel = threading.Event()
+    got_first = threading.Event()
+    finished = threading.Event()
+    chunks: list[str] = []
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            for chunk in backend.stream_generate(
+                handle, [ChatTurn(role="user", content="hi")], GenerationParams(), cancel
+            ):
+                chunks.append(chunk)
+                got_first.set()
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    assert got_first.wait(timeout=2)
+    assert not finished.wait(timeout=0.15)
+    cancel.set()
+    assert finished.wait(timeout=2)
+    thread.join(timeout=2)
+    assert chunks == ["one"]
+    assert errors == []
+
+
+def test_stream_generate_non_dict_json_is_engine_error(
+    make_backend: Callable[[Handler], OllamaBackend],
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'["not", "an", "object"]\n')
+
+    with pytest.raises(EngineError) as exc:
+        _generate(make_backend(handler))
+    assert exc.value.code == "load_failed"
+
+
+def test_stream_generate_non_dict_message_is_engine_error(
+    make_backend: Callable[[Handler], OllamaBackend],
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"message":"oops","done":false}\n')
+
+    with pytest.raises(EngineError) as exc:
+        _generate(make_backend(handler))
+    assert exc.value.code == "load_failed"
+
+
+def test_owned_client_close_is_idempotent() -> None:
+    backend = OllamaBackend()
+    backend.close()
+    backend.close()
+
+
+def test_injected_client_close_does_not_close_client(
+    make_backend: Callable[[Handler], OllamaBackend],
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"models": []})
+
+    backend = make_backend(handler)
+    backend.close()
+    ok, reason = backend.is_available()
+    assert ok is True
+    assert reason is None
 
 
 def test_stream_generate_model_missing(make_backend: Callable[[Handler], OllamaBackend]) -> None:

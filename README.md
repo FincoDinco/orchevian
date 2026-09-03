@@ -21,7 +21,9 @@ uv sync --group dev
 uv run llm-engine --help
 ```
 
-Subcommands: `chat`, `models`, `serve`, `migrate`, `health`. Most are stubs until later engine PRs.
+Subcommands: `chat`, `models`, `serve`, `migrate`, `health`.
+
+`llm-engine models` lists registry backends (Ollama) and prints unavailable reasons on stderr. Other subcommands are stubs until later engine PRs.
 
 ```bash
 uv run llm-engine health

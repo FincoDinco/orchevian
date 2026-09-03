@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
@@ -58,6 +59,35 @@ def _handle_options(handle: LoadedHandle) -> LoadOptions:
     return LoadOptions()
 
 
+def _close_on_cancel(
+    response: httpx.Response, cancel: CancelToken, stop: threading.Event
+) -> None:
+    while not stop.is_set():
+        if cancel.is_set():
+            try:
+                response.close()
+            except Exception:
+                pass
+            return
+        stop.wait(0.05)
+
+
+def _chunk_content(data: object) -> tuple[str | None, bool]:
+    if not isinstance(data, dict):
+        raise EngineError("load_failed", "Ollama returned invalid JSON")
+    if err := data.get("error"):
+        raise EngineError("load_failed", str(err))
+    message = data.get("message")
+    if message is None:
+        content = None
+    elif not isinstance(message, dict):
+        raise EngineError("load_failed", "Ollama returned invalid JSON")
+    else:
+        raw = message.get("content")
+        content = raw if isinstance(raw, str) and raw else None
+    return content, bool(data.get("done"))
+
+
 class OllamaBackend:
     name = BackendName.OLLAMA
 
@@ -67,6 +97,11 @@ class OllamaBackend:
             self._owns_client = True
         else:
             self._client = client
+            self._owns_client = False
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
             self._owns_client = False
 
     def is_available(self) -> tuple[bool, str | None]:
@@ -121,8 +156,8 @@ class OllamaBackend:
     def load(self, model: LocalModel, options: LoadOptions | None = None) -> ModelHandle:
         return ModelHandle(model=model, options=options or LoadOptions())
 
-    def unload(self, handle: LoadedHandle) -> None:
-        del handle
+    def unload(self, _handle: LoadedHandle) -> None:
+        return
 
     def stream_generate(
         self,
@@ -135,6 +170,7 @@ class OllamaBackend:
             "model": handle.model.ref.name,
             "messages": [{"role": turn.role, "content": turn.content} for turn in messages],
             "stream": True,
+            "think": False,
             "options": {
                 "temperature": params.temperature,
                 "top_p": params.top_p,
@@ -142,8 +178,13 @@ class OllamaBackend:
                 "num_ctx": _handle_options(handle).n_ctx,
             },
         }
+        if cancel.is_set():
+            return
         try:
             with self._client.stream("POST", "/api/chat", json=payload, timeout=None) as response:
+                if cancel.is_set():
+                    response.close()
+                    return
                 if response.status_code != 200:
                     body = response.read().decode("utf-8", errors="replace")
                     code = "not_found" if response.status_code == 404 else "load_failed"
@@ -155,7 +196,18 @@ class OllamaBackend:
             raise EngineError("backend_unavailable", f"{_DOWN} ({exc})") from exc
 
     def _iter_chat_stream(self, response: httpx.Response, cancel: CancelToken) -> Iterator[str]:
+        stop = threading.Event()
+        watcher = threading.Thread(
+            target=_close_on_cancel,
+            args=(response, cancel, stop),
+            daemon=True,
+            name="ollama-cancel",
+        )
+        watcher.start()
         try:
+            if cancel.is_set():
+                response.close()
+                return
             for line in response.iter_lines():
                 if cancel.is_set():
                     response.close()
@@ -166,17 +218,22 @@ class OllamaBackend:
                     data = json.loads(line)
                 except json.JSONDecodeError as exc:
                     raise EngineError("load_failed", "Ollama returned invalid JSON") from exc
-                if err := data.get("error"):
-                    raise EngineError("load_failed", str(err))
-                content = (data.get("message") or {}).get("content")
+                content, done = _chunk_content(data)
                 if content:
                     yield content
-                if data.get("done"):
+                if done:
                     return
-        except (httpx.HTTPError, httpx.StreamError) as exc:
+        except Exception as exc:
             if cancel.is_set():
                 return
-            raise EngineError("backend_unavailable", f"{_DOWN} ({exc})") from exc
+            if isinstance(exc, EngineError):
+                raise
+            if isinstance(exc, httpx.HTTPError | httpx.StreamError):
+                raise EngineError("backend_unavailable", f"{_DOWN} ({exc})") from exc
+            raise
+        finally:
+            stop.set()
+            watcher.join(timeout=1.0)
 
     def delete(self, model: LocalModel) -> None:
         try:

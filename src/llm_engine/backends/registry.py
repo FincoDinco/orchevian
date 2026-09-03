@@ -45,3 +45,9 @@ class BackendRegistry:
                 continue
             models.extend(backend.list_models())
         return models, availability
+
+    def close(self) -> None:
+        for backend in self._backends:
+            closer = getattr(backend, "close", None)
+            if callable(closer):
+                closer()

@@ -82,6 +82,8 @@ class FakeBackend:
         cancel: CancelToken,
     ) -> Iterator[str]:
         del handle, messages, params
+        if self._fail_after is not None and self._fail_after <= 0:
+            raise self._error
         yielded = 0
         for chunk in self.chunks:
             if cancel.is_set():

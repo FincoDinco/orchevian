@@ -47,9 +47,15 @@ class _DownBackend:
 def test_default_registry_is_ollama_only(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LLM_ENGINE_FAKE_BACKEND", raising=False)
     backends = default_backends()
-    assert len(backends) == 1
-    assert isinstance(backends[0], OllamaBackend)
-    assert backends[0].name == BackendName.OLLAMA
+    try:
+        assert len(backends) == 1
+        assert isinstance(backends[0], OllamaBackend)
+        assert backends[0].name == BackendName.OLLAMA
+    finally:
+        for backend in backends:
+            closer = getattr(backend, "close", None)
+            if callable(closer):
+                closer()
 
 
 def test_env_flag_registers_fake_instead_of_ollama(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -178,6 +184,15 @@ def test_fake_yield_once_then_raise() -> None:
     assert exc.value.code == "load_failed"
 
 
+def test_fake_raise_before_first_yield() -> None:
+    fake = FakeBackend(chunks=("one", "two"), fail_after=0)
+    handle = fake.load(_model(BackendName.OLLAMA, "fake"))
+    gen = fake.stream_generate(handle, [], GenerationParams(), threading.Event())
+    with pytest.raises(EngineError) as exc:
+        next(gen)
+    assert exc.value.code == "load_failed"
+
+
 def test_cli_models_prints_availability(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -218,3 +233,13 @@ def test_cli_models_lists_fake(
     captured = capsys.readouterr()
     assert "ollama/qwen3:8b" in captured.out
     assert captured.err == ""
+
+
+def test_registry_close_closes_owned_ollama(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LLM_ENGINE_FAKE_BACKEND", raising=False)
+    registry = BackendRegistry()
+    backend = registry.backends()[0]
+    assert isinstance(backend, OllamaBackend)
+    registry.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        backend.is_available()
