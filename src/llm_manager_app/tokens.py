@@ -105,14 +105,29 @@ def qss(palette: StudioPalette) -> str:
         border: none;
         padding: 6px 8px;
     }}
-    QLabel#listEmpty {{
+    QLabel#listEmpty, QLabel#chatEmpty {{
         color: {palette.secondary};
         background: transparent;
     }}
-    QWidget#detailPane, QLabel#detailPane {{
+    QWidget#detailPane, QLabel#detailPane, QWidget#transcript {{
         background-color: {palette.canvas};
-        color: {palette.secondary};
+        color: {palette.text};
         border: none;
+    }}
+    QTextBrowser#transcriptHistory, QPlainTextEdit#transcriptStream {{
+        background-color: {palette.canvas}; color: {palette.text}; border: none;
+    }}
+    QPlainTextEdit#composerEdit {{
+        background-color: {palette.elevated}; color: {palette.text};
+        border: none; border-radius: {palette.radius_composer}px; padding: 8px;
+    }}
+    QPushButton#sendButton {{
+        background-color: {palette.accent}; color: {palette.text};
+        border: none; border-radius: 14px;
+    }}
+    QLabel#chatBanner {{ color: {palette.danger}; }}
+    QPushButton#regenerateButton {{
+        background: transparent; color: {palette.accent}; border: none;
     }}
     QSplitter::handle {{
         background-color: {palette.separator};

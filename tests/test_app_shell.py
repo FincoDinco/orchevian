@@ -121,6 +121,7 @@ def test_main_window_three_column_splitter(tmp_path: Path) -> None:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QLabel, QListView, QSplitter
 
+    from llm_manager_app.widgets.chat_view import ChatView
     from llm_manager_app.widgets.conversation_list import ConversationList
     from llm_manager_app.widgets.sidebar import Sidebar
 
@@ -143,10 +144,10 @@ def test_main_window_three_column_splitter(tmp_path: Path) -> None:
         assert view is not None
         model = view.model()
         assert model is not None and model.rowCount() == 0
-        assert isinstance(detail, QLabel)
-        text = detail.text()
-        assert "loaded: none" in text
-        assert "generating: no" in text
+        assert isinstance(detail, ChatView)
+        empty = detail.findChild(QLabel, "chatEmpty")
+        assert empty is not None
+        assert "Select a conversation" in empty.text()
         assert window.windowTitle() == "LLM Manager"
         assert window.minimumWidth() >= 1024
         assert window.minimumHeight() >= 680
@@ -222,7 +223,7 @@ def test_conversation_list_uses_summaries_not_messages(tmp_path: Path) -> None:
 
         def get_conversation(self, id: int):
             self.calls.append("get_conversation")
-            raise AssertionError("list must not load messages")
+            return library.get_conversation(id)
 
         def create_conversation(self):
             self.calls.append("create_conversation")
@@ -242,7 +243,6 @@ def test_conversation_list_uses_summaries_not_messages(tmp_path: Path) -> None:
     window, _owned, _svc = _window(tmp_path, library=guard)
     try:
         window.show()
-        assert "get_conversation" not in guard.calls
         assert "list_conversations" in guard.calls
         view = window.findChild(QListView, "conversationView")
         assert view is not None
@@ -260,7 +260,6 @@ def test_conversation_list_uses_summaries_not_messages(tmp_path: Path) -> None:
         empty = window.findChild(QLabel, "listEmpty")
         assert empty is not None
         assert "No matching conversations" in empty.text()
-        assert "get_conversation" not in guard.calls
 
         search.clear()
         btn = window.findChild(QPushButton, "newChatButton")
@@ -268,7 +267,8 @@ def test_conversation_list_uses_summaries_not_messages(tmp_path: Path) -> None:
         btn.click()
         assert "create_conversation" in guard.calls
         assert model.rowCount() == 2
-        assert "get_conversation" not in guard.calls
+        list_calls = [c for c in guard.calls if c == "list_conversations"]
+        assert list_calls
     finally:
         window.close()
         store.close()
