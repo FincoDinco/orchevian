@@ -14,9 +14,11 @@ dependencies = [
 [project.optional-dependencies]
 mlx = ["mlx-lm"]
 gguf = ["llama-cpp-python"]
+gui = ["PySide6>=6.7"]
 
 [project.scripts]
 llm-engine = "llm_engine.cli:main"
+llm-manager = "llm_manager_app.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -26,6 +28,7 @@ build-backend = "hatchling.build"
 dev = [
     "pytest>=8.3",
     "ruff>=0.9",
+    "PySide6>=6.7",
 ]
 
 [tool.pytest.ini_options]
@@ -40,7 +43,10 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["llm_engine"]
+known-first-party = ["llm_engine", "llm_manager_app"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_engine", "src/llm_manager_app"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/llm_engine/store/schema.sql" = "llm_engine/store/schema.sql"

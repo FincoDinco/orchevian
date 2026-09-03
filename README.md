@@ -2,7 +2,7 @@
 
 Local-first desktop app for discovering, loading, and chatting with large language models on this machine.
 
-This repository is a greenfield rebuild. **`llm_engine`** is a Python library with no GUI imports. A PySide6 GUI (`llm_manager_app`) will land in a later PR.
+This repository is a greenfield rebuild. **`llm_engine`** is a Python library with no GUI imports. **`llm_manager_app`** is a PySide6 GUI that talks only to engine services.
 
 ## Requirements
 
@@ -12,7 +12,14 @@ This repository is a greenfield rebuild. **`llm_engine`** is a Python library wi
 ## Setup
 
 ```bash
-uv sync --group dev
+uv sync --extra gui --group dev
+```
+
+## Launch
+
+```bash
+uv run llm-manager          # GUI (three-column shell)
+uv run llm-engine --help    # engine CLI
 ```
 
 ## Engine CLI
@@ -32,6 +39,7 @@ uv run llm-engine health
 ## Layout
 
 - `src/llm_engine` — engine library (must not import PySide6)
+- `src/llm_manager_app` — PySide6 GUI (must not import sqlite3 / mlx_lm / llama_cpp)
 - `tests/` — pytest
 
 ## Data paths
