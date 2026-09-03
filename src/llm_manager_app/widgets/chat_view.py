@@ -47,6 +47,8 @@ class ChatView(QWidget):
         self._rejected_banners: dict[int, str] = {}
         self._catalog_error: str | None = None
         self._catalog_ready = False
+        self._session_busy = False
+        self._session_busy_copy = "Model is loading or generating."
 
         self._empty = QLabel("Select a conversation.", self)
         self._empty.setObjectName("chatEmpty")
@@ -200,6 +202,15 @@ class ChatView(QWidget):
         self._banner.setText(text)
         self._banner.show()
 
+    def set_session_busy(self, busy: bool) -> None:
+        self._session_busy = busy
+        if busy:
+            self.show_banner(self._session_busy_copy)
+        elif self._banner.text() == self._session_busy_copy:
+            self._banner.hide()
+            self._banner.clear()
+        self._sync_enabled()
+
     def set_catalog(self, models: object, availability: object) -> None:
         model_list: list[LocalModel] = []
         if isinstance(models, list):
@@ -287,7 +298,7 @@ class ChatView(QWidget):
         cid = self._cid
         if cid is None or self._model is None:
             return
-        if self._generating_id is not None or self._pending is not None:
+        if self._generating_id is not None or self._pending is not None or self._session_busy:
             return
         if not self._transcript.turns():
             return
@@ -418,7 +429,7 @@ class ChatView(QWidget):
         cid = self._cid
         if cid is None or self._model is None:
             return
-        if self._generating_id is not None or self._pending is not None:
+        if self._generating_id is not None or self._pending is not None or self._session_busy:
             return
         if not text.strip():
             return
@@ -457,7 +468,11 @@ class ChatView(QWidget):
     def _sync_enabled(self) -> None:
         has = self._cid is not None
         has_model = has and self._model is not None
-        busy = self._generating_id is not None or self._pending is not None
+        busy = (
+            self._generating_id is not None
+            or self._pending is not None
+            or self._session_busy
+        )
         self._picker.setEnabled(has and self._catalog_ready)
         self._composer.setEnabled(has and not busy)
         self._composer.set_send_enabled(has_model and not busy)

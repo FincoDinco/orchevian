@@ -243,12 +243,10 @@ def test_generating_surfaces_engine_error() -> None:
         view.show()
         _trigger(view.job_finished, view.refresh)
         load_btn = view.findChild(QPushButton, "loadButton")
-        assert load_btn is not None
-        _trigger(view.job_finished, load_btn.click)
-        error = view.findChild(QLabel, "modelsError")
-        assert error is not None
-        assert "generating" in error.text()
-        assert not error.isHidden()
+        unload_btn = view.findChild(QPushButton, "unloadButton")
+        assert load_btn is not None and unload_btn is not None
+        assert not load_btn.isEnabled()
+        assert not unload_btn.isEnabled()
         body = view.findChild(QLabel, "modelsDetailBody")
         assert body is not None
         assert "Status: generating" in body.text()
@@ -517,7 +515,7 @@ def test_shutdown_joins_catalog_worker() -> None:
         block.set()
         assert done.wait(2)
         assert listed_after_close is False
-        assert not view._thread.isRunning()
+        assert view.shutdown()
     finally:
         block.set()
         view.shutdown()
@@ -548,9 +546,82 @@ def test_main_window_close_joins_catalog_worker(tmp_path: Path) -> None:
         assert entered.wait(2)
         threading.Timer(0.05, block.set).start()
         window.close()
-        assert not window._models._thread.isRunning()
+        assert window._models.shutdown()
+        assert window._catalog_thread is None or not window._catalog_thread.isRunning()
     finally:
         block.set()
+        window.close()
+        store.close()
+
+
+def test_unload_unexpected_error_is_backend_unavailable() -> None:
+    try:
+        _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QLabel, QPushButton
+
+    class Boom(StubCatalog):
+        def unload(self) -> None:
+            self.unload_thread = threading.current_thread()
+            self.unload_calls += 1
+            raise RuntimeError("disk")
+
+    catalog = Boom(
+        models=[_model(BackendName.OLLAMA, "llama")],
+        availability={"ollama": (True, None)},
+    )
+    view = _view(catalog)
+    try:
+        view.show()
+        _trigger(view.job_finished, view.refresh)
+        load_btn = view.findChild(QPushButton, "loadButton")
+        assert load_btn is not None
+        _trigger(view.job_finished, load_btn.click)
+        unload_btn = view.findChild(QPushButton, "unloadButton")
+        assert unload_btn is not None
+        _trigger(view.job_finished, unload_btn.click)
+        error = view.findChild(QLabel, "modelsError")
+        assert error is not None
+        assert "backend_unavailable" in error.text()
+        assert "disk" in error.text()
+    finally:
+        view.close()
+
+
+def test_main_window_load_runs_on_chat_worker(tmp_path: Path) -> None:
+    try:
+        _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QPushButton
+
+    from llm_manager_app.widgets.sidebar import MODELS
+
+    gui_ident = threading.get_ident()
+
+    class Probe(FakeBackend):
+        def __init__(self) -> None:
+            super().__init__(models=[_model(BackendName.OLLAMA, "llama")])
+            self.load_ident: int | None = None
+
+        def load(self, model, options=None):  # type: ignore[no-untyped-def]
+            self.load_ident = threading.get_ident()
+            return super().load(model, options)
+
+    probe = Probe()
+    window, store, _library = _window(tmp_path, BackendRegistry([probe]))
+    try:
+        _trigger(window._models.job_finished, lambda: window._sidebar.select_section(MODELS))
+        load_btn = window._models.detail.findChild(QPushButton, "loadButton")
+        assert load_btn is not None
+        _trigger(window._models.job_finished, load_btn.click)
+        assert probe.load_ident is not None
+        assert probe.load_ident != gui_ident
+        assert window._chat_view.banner_text() == ""
+    finally:
         window.close()
         store.close()
 

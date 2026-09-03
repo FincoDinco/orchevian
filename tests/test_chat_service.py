@@ -232,6 +232,56 @@ def test_send_rejects_empty_generating_and_no_model(library: LibraryService) -> 
     _wait(rec, chat)
 
 
+def test_send_rejects_if_session_load_in_progress(library: LibraryService) -> None:
+    gate = threading.Event()
+    chat, rec, fake, session = _harness(library, block_load=gate)
+    cid = _new_chat(library)
+    started = threading.Event()
+
+    def _load() -> None:
+        started.set()
+        session.load(REF)
+
+    thread = threading.Thread(target=_load)
+    thread.start()
+    assert started.wait(2)
+    _wait_until(lambda: len(fake.load_calls) > 0)
+    with pytest.raises(EngineError) as busy:
+        chat.send(cid, "hello")
+    assert busy.value.code == "generating"
+    assert library.get_conversation(cid).messages == ()
+    gate.set()
+    thread.join(2)
+    assert not thread.is_alive()
+
+
+def test_catalog_load_blocks_send_before_user_txn(library: LibraryService) -> None:
+    gate = threading.Event()
+    chat, rec, fake, _session = _harness(library, block_load=gate)
+    cid = _new_chat(library)
+    started = threading.Event()
+
+    def _load() -> None:
+        started.set()
+        chat.catalog_load(REF)
+
+    thread = threading.Thread(target=_load)
+    thread.start()
+    assert started.wait(2)
+    _wait_until(lambda: len(fake.load_calls) > 0)
+    with pytest.raises(EngineError) as busy:
+        chat.send(cid, "hello")
+    assert busy.value.code == "generating"
+    assert library.get_conversation(cid).messages == ()
+    gate.set()
+    thread.join(2)
+    assert not thread.is_alive()
+    loaded = chat.catalog_load(REF)
+    assert loaded.ref == REF
+    chat.catalog_unload()
+    assert chat._session.status().loaded is None
+
+
 def test_stop_before_token(library: LibraryService) -> None:
     gate = threading.Event()
     chat, rec, fake, _session = _harness(library, chunks=("Hello",), block_load=gate)

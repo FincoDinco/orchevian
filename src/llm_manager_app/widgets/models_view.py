@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
-from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -115,6 +115,9 @@ class ModelsView(QWidget):
     chat_requested = Signal(object)
     refreshed = Signal()
     job_finished = Signal()
+    refresh_requested = Signal()
+    load_requested = Signal(object)
+    unload_requested = Signal()
 
     _listed = Signal(object, object)
     _loaded = Signal(object)
@@ -128,13 +131,16 @@ class ModelsView(QWidget):
         *,
         catalog: Catalog,
         reveal: Callable[[Path], None] | None = None,
+        external_jobs: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("modelsView")
         self._catalog = catalog
         self._reveal = reveal if reveal is not None else reveal_in_file_manager
+        self._external_jobs = external_jobs
         self._models_by_id: dict[str, LocalModel] = {}
         self._busy = False
+        self._chat_busy = False
         self._closing = False
         self._job_kind: str | None = None
         self._job_lock = threading.Lock()
@@ -237,7 +243,16 @@ class ModelsView(QWidget):
                 return
         self._list.setCurrentRow(-1)
 
-    def refresh(self) -> None:
+    def job_kind(self) -> str | None:
+        return self._job_kind
+
+    def refresh(self) -> bool:
+        if self._external_jobs:
+            if not self._claim_job("refresh"):
+                return False
+            self.refresh_requested.emit()
+            return True
+
         def work() -> None:
             try:
                 models, availability = self._catalog.list_models()
@@ -249,11 +264,16 @@ class ModelsView(QWidget):
             finally:
                 self._emit_job(self._job_done.emit)
 
-        self._start_job(work, "refresh")
+        return self._start_job(work, "refresh")
 
     def load_selected(self) -> None:
         model = self.selected_model()
-        if model is None:
+        if model is None or self._session_busy():
+            return
+        if self._external_jobs:
+            if not self._claim_job("load"):
+                return
+            self.load_requested.emit(model.ref)
             return
 
         def work() -> None:
@@ -270,6 +290,14 @@ class ModelsView(QWidget):
         self._start_job(work, "load")
 
     def unload_loaded(self) -> None:
+        if self._session_busy():
+            return
+        if self._external_jobs:
+            if not self._claim_job("unload"):
+                return
+            self.unload_requested.emit()
+            return
+
         def work() -> None:
             try:
                 self._catalog.unload()
@@ -277,19 +305,50 @@ class ModelsView(QWidget):
             except EngineError as exc:
                 self._emit_job(self._failed.emit, exc)
             except Exception as exc:
-                self._emit_job(self._failed.emit, EngineError("load_failed", str(exc)))
+                self._emit_job(self._failed.emit, EngineError("backend_unavailable", str(exc)))
             finally:
                 self._emit_job(self._job_done.emit)
 
         self._start_job(work, "unload")
 
-    def shutdown(self, timeout_ms: int = _SHUTDOWN_WAIT_MS) -> None:
+    def apply_listed(self, models: object, availability: object) -> None:
+        self._on_listed(models, availability)
+
+    def apply_loaded(self, model: object) -> None:
+        self._on_loaded(model)
+
+    def apply_unloaded(self) -> None:
+        self._on_unloaded()
+
+    def apply_failed(self, error: object) -> None:
+        self._on_failed(error)
+
+    def finish_job(self) -> None:
+        self._on_job_done()
+
+    def set_chat_busy(self, busy: bool) -> None:
+        self._chat_busy = busy
+        self._sync_actions()
+
+    def sync_from_session(self) -> None:
+        self._render_detail()
+
+    def shutdown(self, timeout_ms: int = _SHUTDOWN_WAIT_MS) -> bool:
         self._closing = True
+        done = True
         if self._thread.isRunning():
-            self._thread.wait(timeout_ms)
+            done = self._thread.wait(timeout_ms)
         app = QApplication.instance()
         if app is not None:
             app.processEvents()
+        return done and not self._thread.isRunning()
+
+    def take_running_thread(self, parent: QObject | None) -> QThread | None:
+        thread = self._thread
+        if not thread.isRunning():
+            return None
+        thread.setParent(parent)
+        return thread
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.shutdown()
@@ -307,14 +366,25 @@ class ModelsView(QWidget):
             return
         self.chat_requested.emit(model.ref)
 
-    def _start_job(self, work: Callable[[], None], kind: str) -> None:
+    def _session_busy(self) -> bool:
+        return self._chat_busy or self._catalog.status().generating
+
+    def _claim_job(self, kind: str) -> bool:
         with self._job_lock:
-            if self._busy or self._closing or self._thread.isRunning():
-                return
+            if self._busy or self._closing:
+                return False
+            if not self._external_jobs and self._thread.isRunning():
+                return False
             self._busy = True
             self._job_kind = kind
         self._sync_actions()
+        return True
+
+    def _start_job(self, work: Callable[[], None], kind: str) -> bool:
+        if not self._claim_job(kind):
+            return False
         self._thread.run_work(work)
+        return True
 
     def _emit_job(self, emit: Callable[..., object], *args: object) -> None:
         if self._closing:
@@ -425,8 +495,9 @@ class ModelsView(QWidget):
         status = self._catalog.status()
         has_model = model is not None
         loaded = status.loaded
-        self._load_btn.setEnabled(has_model and not self._busy)
-        self._unload_btn.setEnabled(loaded is not None and not self._busy)
+        busy = self._busy or self._session_busy()
+        self._load_btn.setEnabled(has_model and not busy)
+        self._unload_btn.setEnabled(loaded is not None and not busy)
         self._reveal_btn.setEnabled(has_model and model.path is not None and not self._busy)
         self._chat_btn.setEnabled(has_model)
         if self._busy and self._job_kind == "load":

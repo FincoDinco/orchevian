@@ -14,6 +14,8 @@ from llm_engine.domain.models import (
     ChatTurn,
     Conversation,
     GenerationParams,
+    LoadOptions,
+    LocalModel,
     ModelRef,
 )
 from llm_engine.logging import get_logger
@@ -124,6 +126,30 @@ class ChatService:
             backend=str(ref.backend),
         )
 
+    def catalog_load(self, ref: ModelRef, options: LoadOptions | None = None) -> LocalModel:
+        cancel = self._claim_session()
+        try:
+            return self._session.load(ref, options)
+        finally:
+            self._release(cancel)
+
+    def catalog_unload(self) -> None:
+        cancel = self._claim_session()
+        try:
+            self._session.unload()
+        finally:
+            self._release(cancel)
+
+    def _claim_session(self) -> threading.Event:
+        with self._state_lock:
+            if self._generating or self._session.status().generating:
+                raise EngineError("generating", "generation already in progress")
+            cancel = threading.Event()
+            self._generating = True
+            self._active_id = None
+            self._cancel = cancel
+            return cancel
+
     def _accept(
         self,
         conversation_id: int,
@@ -131,7 +157,7 @@ class ChatService:
         persist_user: str | None,
     ) -> tuple[ModelRef, str, threading.Event]:
         with self._state_lock:
-            if self._generating:
+            if self._generating or self._session.status().generating:
                 raise EngineError("generating", "generation already in progress")
             if persist_user is not None and not persist_user.strip():
                 raise EngineError("config_invalid", "empty content")
@@ -371,7 +397,7 @@ class ChatService:
     @staticmethod
     def _wrap_error(exc: BaseException, *, during_load: bool) -> EngineError:
         code = "load_failed" if during_load else "backend_unavailable"
-        if isinstance(exc, EngineError) and exc.code == code:
+        if isinstance(exc, EngineError) and exc.code in {code, "generating", "cancelled"}:
             return exc
         return EngineError(code, str(exc))
 

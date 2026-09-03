@@ -6,7 +6,7 @@ from PySide6.QtCore import Q_ARG, QMetaObject, QObject, Qt, QThread, Signal, Slo
 
 from llm_engine.backends.registry import BackendRegistry
 from llm_engine.domain.errors import EngineError
-from llm_engine.domain.models import GenerationParams
+from llm_engine.domain.models import GenerationParams, ModelRef
 from llm_engine.services.chat import ChatService
 from llm_engine.services.session import ModelSession
 
@@ -28,6 +28,9 @@ class ChatWorker(QObject):
     rejected = Signal(int, str, str)
     unloaded = Signal()
     unload_failed = Signal(str, str)
+    catalog_loaded = Signal(object)
+    catalog_unloaded = Signal()
+    catalog_failed = Signal(str, str)
 
     def __init__(self, chat: ChatService, session: ModelSession | None = None) -> None:
         super().__init__()
@@ -75,6 +78,33 @@ class ChatWorker(QObject):
             return
         # Load still holds the lock with no handle yet; GUI must stay busy.
         self.unload_failed.emit("generating", "load still in progress")
+
+    @Slot(object)
+    def catalog_load(self, ref: object) -> None:
+        if not isinstance(ref, ModelRef):
+            self.catalog_failed.emit("config_invalid", "invalid model")
+            return
+        try:
+            loaded = self._chat.catalog_load(ref)
+        except EngineError as exc:
+            self.catalog_failed.emit(exc.code, str(exc))
+            return
+        except Exception as exc:
+            self.catalog_failed.emit("load_failed", str(exc))
+            return
+        self.catalog_loaded.emit(loaded)
+
+    @Slot()
+    def catalog_unload(self) -> None:
+        try:
+            self._chat.catalog_unload()
+        except EngineError as exc:
+            self.catalog_failed.emit(exc.code, str(exc))
+            return
+        except Exception as exc:
+            self.catalog_failed.emit("backend_unavailable", str(exc))
+            return
+        self.catalog_unloaded.emit()
 
     def _on_token(self, conversation_id: int, text: str) -> None:
         QMetaObject.invokeMethod(

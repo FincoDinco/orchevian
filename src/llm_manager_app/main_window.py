@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from llm_engine.backends.registry import BackendRegistry
 from llm_engine.config import default_log_path
+from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import ModelRef
 from llm_engine.services.catalog import CatalogService
 from llm_engine.services.chat import ChatService
@@ -105,6 +106,7 @@ class MainWindow(QMainWindow):
         self._worker_thread: QThread | None = None
         self._catalog: CatalogWorker
         self._catalog_thread, self._catalog = start_catalog_worker(self._registry, self)
+        self._linger_threads: list[QThread] = []
         if isinstance(library, LibraryService):
             self._chat_service = ChatService(library, self._session)
             self._worker_thread, self._worker = start_chat_worker(
@@ -126,8 +128,13 @@ class MainWindow(QMainWindow):
         self._list = ConversationList(self._list_stack, library=self._library)
         self._list.selected_id_changed.connect(self._on_selected)
         self._list.chat_created.connect(self._on_chat_created)
-        self._models = ModelsView(self._list_stack, catalog=self._catalog_service)
+        self._models = ModelsView(
+            self._list_stack, catalog=self._catalog_service, external_jobs=True
+        )
         self._models.chat_requested.connect(self._on_chat_with_model)
+        self._models.refresh_requested.connect(
+            self._catalog.list_models, Qt.ConnectionType.QueuedConnection
+        )
         self._list_stack.addWidget(self._list)
         self._list_stack.addWidget(self._models)
 
@@ -145,23 +152,41 @@ class MainWindow(QMainWindow):
         self._chat_view.catalog_requested.connect(
             self._catalog.list_models, Qt.ConnectionType.QueuedConnection
         )
-        self._catalog.listed.connect(self._chat_view.set_catalog)
-        self._catalog.failed.connect(self._chat_view.on_catalog_failed)
+        self._catalog.listed.connect(self._on_catalog_listed)
+        self._catalog.failed.connect(self._on_catalog_failed)
         self._detail_stack.addWidget(self._chat_view)
         self._detail_stack.addWidget(self._models.detail)
         if self._worker is not None:
             # Queued: worker lives on a QThread after start_chat_worker.
+            self._chat_view.send_requested.connect(self._on_chat_busy_started)
             self._chat_view.send_requested.connect(self._worker.send)
+            self._chat_view.regenerate_requested.connect(self._on_chat_busy_started)
             self._chat_view.regenerate_requested.connect(self._worker.regenerate)
             self._chat_view.unload_requested.connect(self._worker.unload)
+            self._models.load_requested.connect(self._on_models_load)
+            self._models.load_requested.connect(
+                self._worker.catalog_load, Qt.ConnectionType.QueuedConnection
+            )
+            self._models.unload_requested.connect(self._on_models_unload)
+            self._models.unload_requested.connect(
+                self._worker.catalog_unload, Qt.ConnectionType.QueuedConnection
+            )
             self._worker.accepted.connect(self._chat_view.on_accepted)
             self._worker.accepted.connect(self._on_chat_accepted)
+            self._worker.accepted.connect(self._on_chat_busy_started)
             self._worker.rejected.connect(self._chat_view.on_rejected)
+            self._worker.rejected.connect(self._on_chat_busy_ended)
             self._worker.token.connect(self._chat_view.on_token)
             self._worker.done.connect(self._chat_view.on_done)
+            self._worker.done.connect(self._on_chat_busy_ended)
             self._worker.error.connect(self._chat_view.on_error)
+            self._worker.error.connect(self._on_chat_busy_ended)
             self._worker.unloaded.connect(self._chat_view.on_unloaded)
+            self._worker.unloaded.connect(self._on_chat_busy_ended)
             self._worker.unload_failed.connect(self._chat_view.on_unload_failed)
+            self._worker.catalog_loaded.connect(self._on_catalog_model_loaded)
+            self._worker.catalog_unloaded.connect(self._on_catalog_model_unloaded)
+            self._worker.catalog_failed.connect(self._on_catalog_model_failed)
 
         splitter.addWidget(self._sidebar)
         splitter.addWidget(self._list_stack)
@@ -192,8 +217,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._persist_chrome()
-        self._models.shutdown()
-        models_done = not self._models._thread.isRunning()
+        try:
+            self._session.force_unload()
+        except Exception:
+            pass
         service = self._chat_service
         if service is not None:
             with service._state_lock:
@@ -206,6 +233,7 @@ class MainWindow(QMainWindow):
         qt_app = QApplication.instance()
         if qt_app is not None:
             qt_app.processEvents()
+        models_done = self._models.shutdown()
         if self._worker is not None:
             for sig in (
                 self._worker.accepted,
@@ -215,21 +243,31 @@ class MainWindow(QMainWindow):
                 self._worker.error,
                 self._worker.unloaded,
                 self._worker.unload_failed,
+                self._worker.catalog_loaded,
+                self._worker.catalog_unloaded,
+                self._worker.catalog_failed,
             ):
                 try:
                     sig.disconnect()
                 except RuntimeError:
                     pass
         thread = self._worker_thread
+        chat_done = True
         if thread is not None:
             thread.quit()
-            thread.wait(2000)
+            chat_done = thread.wait(2000)
             self._worker_thread = None
+            if not chat_done:
+                self._linger(thread)
         catalog_thread = self._catalog_thread
         catalog_done = True
         if catalog_thread is not None:
             try:
                 self._chat_view.catalog_requested.disconnect(self._catalog.list_models)
+            except RuntimeError:
+                pass
+            try:
+                self._models.refresh_requested.disconnect(self._catalog.list_models)
             except RuntimeError:
                 pass
             try:
@@ -239,15 +277,20 @@ class MainWindow(QMainWindow):
                 pass
             catalog_thread.quit()
             catalog_done = catalog_thread.wait(6000)
-            if catalog_done:
-                self._catalog_thread = None
-            else:
-                app = QApplication.instance()
-                catalog_thread.setParent(app)
-                catalog_thread.finished.connect(self._on_catalog_finished)
-                if catalog_thread.isFinished():
-                    self._on_catalog_finished()
-        if self._owns_registry and catalog_done and models_done:
+            self._catalog_thread = None
+            if not catalog_done:
+                self._linger(catalog_thread)
+        if not models_done:
+            lingering = self._models.take_running_thread(QApplication.instance())
+            if lingering is not None:
+                self._linger(lingering)
+        if (
+            self._owns_registry
+            and chat_done
+            and catalog_done
+            and models_done
+            and not self._linger_threads
+        ):
             self._registry.close()
             self._owns_registry = False
         store = self._store
@@ -257,15 +300,21 @@ class MainWindow(QMainWindow):
             self._store = None
         super().closeEvent(event)
 
-    def _on_catalog_finished(self) -> None:
-        thread = self._catalog_thread
-        if thread is None:
+    def _linger(self, thread: QThread) -> None:
+        app = QApplication.instance()
+        thread.setParent(app)
+        thread.finished.connect(self._on_linger_finished)
+        self._linger_threads.append(thread)
+        if thread.isFinished():
+            self._on_linger_finished()
+
+    def _on_linger_finished(self) -> None:
+        self._linger_threads = [item for item in self._linger_threads if item.isRunning()]
+        if self._linger_threads:
             return
         if self._owns_registry:
             self._registry.close()
             self._owns_registry = False
-        self._catalog_thread = None
-        thread.deleteLater()
 
     def _build_menus(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -315,7 +364,7 @@ class MainWindow(QMainWindow):
         find_act = QAction("Find", self)
         find_act.setObjectName("findAction")
         find_act.setShortcut(QKeySequence.StandardKey.Find)
-        find_act.triggered.connect(self._list.focus_search)
+        find_act.triggered.connect(self._focus_search)
         view_menu.addAction(find_act)
         self._shortcut_find = find_act
 
@@ -327,7 +376,7 @@ class MainWindow(QMainWindow):
         composer_act = QAction("Focus Composer", self)
         composer_act.setObjectName("focusComposerAction")
         composer_act.setShortcut(QKeySequence("Ctrl+L"))
-        composer_act.triggered.connect(self._chat_view.focus_composer)
+        composer_act.triggered.connect(self._focus_composer)
         chat_menu.addAction(composer_act)
         self._shortcut_composer = composer_act
 
@@ -365,7 +414,7 @@ class MainWindow(QMainWindow):
             )
             self._settings_dialog.appearance_changed.connect(self._on_appearance)
             self._settings_dialog.return_sends_changed.connect(self._chat_view.set_return_sends)
-            self._settings_dialog.rescan_requested.connect(self._models.refresh)
+            self._settings_dialog.rescan_requested.connect(self._rescan_catalog)
         self._settings_dialog.reload()
         self._settings_dialog.show()
         self._settings_dialog.raise_()
@@ -411,6 +460,61 @@ class MainWindow(QMainWindow):
         if self._sidebar.current_section() != CHATS:
             return
         self._list.delete_selected()
+
+    def _focus_search(self) -> None:
+        if self._sidebar.current_section() != CHATS:
+            return
+        self._list.focus_search()
+
+    def _focus_composer(self) -> None:
+        if self._sidebar.current_section() != CHATS:
+            return
+        self._chat_view.focus_composer()
+
+    def _rescan_catalog(self) -> None:
+        if not self._models.refresh():
+            self._chat_view.catalog_requested.emit()
+
+    def _on_catalog_listed(self, models: object, availability: object) -> None:
+        self._chat_view.set_catalog(models, availability)
+        self._models.apply_listed(models, availability)
+        if self._models.job_kind() == "refresh":
+            self._models.finish_job()
+
+    def _on_catalog_failed(self, code: str, message: str) -> None:
+        self._chat_view.on_catalog_failed(code, message)
+        if self._models.job_kind() == "refresh":
+            self._models.apply_failed(EngineError(code, message))
+            self._models.finish_job()
+
+    def _on_models_load(self, _ref: object) -> None:
+        self._chat_view.set_session_busy(True)
+
+    def _on_models_unload(self) -> None:
+        self._chat_view.set_session_busy(True)
+
+    def _on_catalog_model_loaded(self, model: object) -> None:
+        self._chat_view.set_session_busy(False)
+        self._models.apply_loaded(model)
+        self._models.finish_job()
+
+    def _on_catalog_model_unloaded(self) -> None:
+        self._chat_view.set_session_busy(False)
+        self._models.apply_unloaded()
+        self._models.finish_job()
+
+    def _on_catalog_model_failed(self, code: str, message: str) -> None:
+        self._chat_view.set_session_busy(False)
+        self._models.apply_failed(EngineError(code, message))
+        self._models.finish_job()
+
+    def _on_chat_busy_started(self, *_args: object) -> None:
+        self._models.set_chat_busy(True)
+        self._models.sync_from_session()
+
+    def _on_chat_busy_ended(self, *_args: object) -> None:
+        self._models.set_chat_busy(False)
+        self._models.sync_from_session()
 
     def _on_filter(self, selection: object) -> None:
         if not isinstance(selection, SidebarSelection):

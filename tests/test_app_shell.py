@@ -393,6 +393,32 @@ def test_new_chat_shortcut_switches_to_chats(tmp_path: Path) -> None:
             store.close()
 
 
+def test_find_and_composer_noop_on_models(tmp_path: Path) -> None:
+    try:
+        _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    window, store, _library_svc = _window(tmp_path)
+    try:
+        window.show()
+        window._sidebar.select_section("models")
+        focused: list[str] = []
+        window._list.focus_search = lambda: focused.append("find")  # type: ignore[method-assign]
+        window._chat_view.focus_composer = lambda: focused.append("composer")  # type: ignore[method-assign]
+        window._focus_search()
+        window._focus_composer()
+        assert focused == []
+        window._sidebar.select_section("chats")
+        window._focus_search()
+        window._focus_composer()
+        assert focused == ["find", "composer"]
+    finally:
+        window.close()
+        if store is not None:
+            store.close()
+
+
 def _sidebar_labels(sidebar) -> list[str]:
     from PySide6.QtCore import QModelIndex
 
