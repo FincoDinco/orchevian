@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,15 @@ import pytest
 from llm_engine.backends.fake import FakeBackend
 from llm_engine.backends.registry import BackendRegistry
 from llm_engine.domain.errors import EngineError
-from llm_engine.domain.models import BackendName, GenerationParams, LocalModel, ModelRef
+from llm_engine.domain.models import (
+    BackendName,
+    ChatTurn,
+    Conversation,
+    ConversationSummary,
+    GenerationParams,
+    LocalModel,
+    ModelRef,
+)
 from llm_engine.store.library import LibraryService
 from llm_engine.store.sqlite import SqliteStore
 
@@ -135,6 +144,10 @@ def test_composer_return_sends_shift_return_newline() -> None:
     composer.set_text("\n".join(["line"] * 40))
     app.processEvents()
     assert edit.height() == 140
+
+    composer.set_text("word " * 80)
+    app.processEvents()
+    assert 40 < edit.height() <= 140
     host.close()
 
 
@@ -324,13 +337,18 @@ def test_stop_escape_cancels(tmp_path: Path) -> None:
         window._chat_view.composer().submit()
         assert probe.entered.wait(2.0)
         deadline = time.monotonic() + 2.0
+        plain = None
         while time.monotonic() < deadline:
             app.processEvents()
-            if window._chat_view.transcript().is_streaming():
+            plain = window.findChild(QPlainTextEdit, "transcriptStream")
+            if (
+                window._chat_view.transcript().is_streaming()
+                and plain is not None
+                and "." in plain.toPlainText()
+            ):
                 break
             time.sleep(0.01)
         assert window._chat_view.transcript().is_streaming()
-        plain = window.findChild(QPlainTextEdit, "transcriptStream")
         assert plain is not None and "." in plain.toPlainText()
         shortcuts = window.findChildren(QShortcut)
         assert any(s.key().matches(QKeySequence(Qt.Key.Key_Escape)) for s in shortcuts)
@@ -410,3 +428,106 @@ def test_send_without_model_shows_banner(tmp_path: Path) -> None:
     finally:
         window.close()
         store.close()
+
+
+def _conv(cid: int, title: str = "New Chat") -> Conversation:
+    now = datetime.now()
+    return Conversation(
+        summary=ConversationSummary(
+            id=cid,
+            title=title,
+            model=None,
+            project_id=None,
+            message_count=0,
+            updated_at=now,
+            created_at=now,
+        ),
+        system_prompt="",
+        messages=(),
+    )
+
+
+def test_rejected_does_not_restore_composer_on_other_conversation() -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from llm_manager_app.widgets.chat_view import ChatView
+
+    view = ChatView()
+    view.show()
+    app.processEvents()
+    view.set_conversation(_conv(1, "Alpha"))
+    view.composer().set_text("secret-draft")
+    view.composer().submit()
+    view.set_conversation(_conv(2, "Beta"))
+    view.on_rejected(1, "no_model", "conversation has no model")
+    assert "secret-draft" not in view.composer().text()
+    assert view.banner_text() == ""
+    view.set_conversation(_conv(1, "Alpha"))
+    app.processEvents()
+    assert view.composer().text() == "secret-draft"
+    assert "model" in view.banner_text()
+    view.close()
+
+
+def test_transcript_scrolls_to_end_after_html() -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QTextBrowser, QVBoxLayout, QWidget
+
+    from llm_manager_app.widgets.transcript import Transcript
+
+    host = QWidget()
+    transcript = Transcript(host)
+    layout = QVBoxLayout(host)
+    layout.addWidget(transcript)
+    host.resize(400, 220)
+    host.show()
+    app.processEvents()
+    turns = [
+        ChatTurn(role="user" if i % 2 == 0 else "assistant", content=f"turn {i} " + "para " * 12)
+        for i in range(20)
+    ]
+    transcript.set_turns(turns)
+    app.processEvents()
+    browser = transcript.findChild(QTextBrowser, "transcriptHistory")
+    assert browser is not None
+    bar = browser.verticalScrollBar()
+    assert bar.maximum() == 0 or bar.value() == bar.maximum()
+    host.close()
+
+
+def test_caret_hides_when_scrolled_out_of_view() -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+    from llm_manager_app.widgets.transcript import Transcript
+
+    host = QWidget()
+    transcript = Transcript(host)
+    layout = QVBoxLayout(host)
+    layout.addWidget(transcript)
+    host.resize(400, 180)
+    host.show()
+    app.processEvents()
+    transcript.set_turns(
+        [ChatTurn(role="user", content="block\n" * 40) for _ in range(2)]
+    )
+    transcript.begin_stream()
+    transcript.append_stream("tail")
+    app.processEvents()
+    caret = transcript.findChild(QWidget, "streamCaret")
+    assert caret is not None
+    transcript._plain.verticalScrollBar().setValue(0)
+    app.processEvents()
+    assert not caret.isVisible()
+    host.close()

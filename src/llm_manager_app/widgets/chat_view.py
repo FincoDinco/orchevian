@@ -32,6 +32,8 @@ class ChatView(QWidget):
         self._pending: tuple[str, int, str] | None = None
         self._error_plain_id: int | None = None
         self._undo_assistant: ChatTurn | None = None
+        self._rejected_drafts: dict[int, str] = {}
+        self._rejected_banners: dict[int, str] = {}
 
         self._empty = QLabel("Select a conversation.", self)
         self._empty.setObjectName("chatEmpty")
@@ -123,8 +125,16 @@ class ChatView(QWidget):
         self._cid = cid
         self._error_plain_id = None
         self._stack.setCurrentIndex(1)
-        self._banner.hide()
         self._transcript.set_turns(conversation.messages)
+        draft = self._rejected_drafts.pop(cid, None)
+        if draft is not None:
+            self._composer.set_text(draft)
+        banner = self._rejected_banners.pop(cid, None)
+        if banner:
+            self._banner.setText(banner)
+            self._banner.show()
+        else:
+            self._banner.hide()
         self._sync_enabled()
 
     def focus_composer(self) -> None:
@@ -167,20 +177,29 @@ class ChatView(QWidget):
         self._pending = None
         if self._generating_id == conversation_id:
             self._generating_id = None
+        draft: str | None = None
+        restore_user = False
+        restore_turn: ChatTurn | None = None
         if pending is not None and pending[1] == conversation_id:
             if pending[0] == "send":
-                self._composer.set_text(pending[2])
-            if self._cid == conversation_id:
-                self._transcript.revert_stream(
-                    restore_user=pending[0] == "send",
-                    restore=self._undo_assistant if pending[0] == "regenerate" else None,
-                )
+                draft = pending[2]
+                restore_user = True
+            elif pending[0] == "regenerate":
+                restore_turn = self._undo_assistant
         self._undo_assistant = None
         self._buffer = ""
+        banner = message or code
         if self._cid != conversation_id:
+            if draft is not None:
+                self._rejected_drafts[conversation_id] = draft
+            self._rejected_banners[conversation_id] = banner
             self._sync_enabled()
             return
-        self._banner.setText(message or code)
+        if restore_user or restore_turn is not None:
+            self._transcript.revert_stream(restore_user=restore_user, restore=restore_turn)
+        if draft is not None:
+            self._composer.set_text(draft)
+        self._banner.setText(banner)
         self._banner.show()
         self._sync_enabled()
         self._composer.focus_edit()
@@ -234,6 +253,8 @@ class ChatView(QWidget):
         self._pending = ("send", cid, text)
         self._generating_id = cid
         self._buffer = ""
+        self._rejected_drafts.pop(cid, None)
+        self._rejected_banners.pop(cid, None)
         self._composer.clear()
         self._banner.hide()
         self._error_plain_id = None

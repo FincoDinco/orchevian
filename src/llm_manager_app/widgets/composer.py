@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeyEvent, QTextCursor
+from PySide6.QtGui import QKeyEvent, QResizeEvent, QTextCursor
 from PySide6.QtWidgets import QHBoxLayout, QPlainTextEdit, QPushButton, QWidget
 
 _MIN_H = 40
@@ -87,8 +87,40 @@ class Composer(QWidget):
         self._edit.setEnabled(enabled)
         self._send.setEnabled(enabled)
 
-    def _fit_height(self) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._fit_height()
+
+    def _visual_line_count(self) -> int:
+        if not self._edit.toPlainText():
+            return 1
         metrics = self._edit.fontMetrics()
-        blocks = max(1, self._edit.document().blockCount())
-        height = _MIN_H + max(0, blocks - 1) * metrics.lineSpacing()
+        spacing = max(metrics.lineSpacing(), 1)
+        width = self._edit.viewport().width()
+        if width <= 0:
+            width = max(self._edit.width(), 1)
+        total = 0
+        block = self._edit.document().firstBlock()
+        while block.isValid():
+            text = block.text()
+            if not text:
+                total += 1
+            else:
+                bound = metrics.boundingRect(
+                    0,
+                    0,
+                    width,
+                    10_000,
+                    Qt.TextFlag.TextWordWrap,
+                    text,
+                )
+                total += max(1, round(bound.height() / spacing))
+            block = block.next()
+        return max(1, total)
+
+    def _fit_height(self) -> None:
+        # QPlainTextDocumentLayout.size() ignores wrap; grow by visual lines.
+        lines = self._visual_line_count()
+        spacing = self._edit.fontMetrics().lineSpacing()
+        height = _MIN_H + max(0, lines - 1) * spacing
         self._edit.setFixedHeight(max(_MIN_H, min(_MAX_H, height)))

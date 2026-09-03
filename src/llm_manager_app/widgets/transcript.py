@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import functools
 import html
-import subprocess
-import sys
 from collections.abc import Sequence
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPaintEvent, QTextCursor
+from PySide6.QtCore import QEvent, QObject, QRect, Qt, QTimer
+from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPaintEvent, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -35,21 +32,11 @@ def _markdown(text: str) -> str:
     return markdown.markdown(text, extensions=["fenced_code", "nl2br", "sane_lists"])
 
 
-@functools.cache
 def prefers_reduced_motion() -> bool:
-    if sys.platform != "darwin":
+    app = QGuiApplication.instance()
+    if app is None:
         return False
-    try:
-        result = subprocess.run(
-            ["defaults", "read", "com.apple.universalaccess", "reduceMotion"],
-            capture_output=True,
-            text=True,
-            timeout=0.3,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.stdout.strip() == "1"
+    return app.styleHints().cursorFlashTime() <= 0
 
 
 def _palette() -> StudioPalette:
@@ -118,8 +105,10 @@ class Transcript(QWidget):
         self._plain.setUndoRedoEnabled(False)
         self._plain.setFrameShape(QFrame.Shape.NoFrame)
         self._plain.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._plain.updateRequest.connect(self._on_plain_update)
 
         self._caret = StreamCaret(self._plain.viewport())
+        self._plain.viewport().installEventFilter(self)
 
         self._stack = QStackedWidget(self)
         self._stack.addWidget(self._browser)
@@ -130,6 +119,11 @@ class Transcript(QWidget):
         layout.addWidget(self._stack)
 
         self._render_html()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self._plain.viewport() and event.type() == QEvent.Type.Resize:
+            self._place_caret()
+        return super().eventFilter(watched, event)
 
     def turns(self) -> tuple[ChatTurn, ...]:
         return tuple(self._turns)
@@ -230,14 +224,33 @@ class Transcript(QWidget):
             blocks.append(self._buffer)
         return "\n\n".join(blocks)
 
+    def _on_plain_update(self, _rect: QRect, _dy: int) -> None:
+        self._place_caret()
+
     def _place_caret(self) -> None:
+        if not self._streaming:
+            self._caret.hide()
+            return
         cursor = self._plain.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         rect = self._plain.cursorRect(cursor)
         y = rect.y() + max(0, (rect.height() - _CARET_H) // 2)
-        self._caret.move(rect.x() + 1, y)
+        x = rect.x() + 1
+        caret_rect = QRect(x, y, _CARET_W, _CARET_H)
+        if not self._plain.viewport().rect().intersects(caret_rect):
+            self._caret.hide()
+            return
+        self._caret.move(x, y)
         self._caret.show()
         self._caret.raise_()
+
+    def _scroll_browser_to_end(self) -> None:
+        cursor = self._browser.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self._browser.setTextCursor(cursor)
+        self._browser.ensureCursorVisible()
+        bar = self._browser.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def _render_html(self) -> None:
         palette = _palette()
@@ -265,3 +278,5 @@ class Transcript(QWidget):
             )
         parts.append("</body></html>")
         self._browser.setHtml("".join(parts))
+        self._scroll_browser_to_end()
+        QTimer.singleShot(0, self._scroll_browser_to_end)
