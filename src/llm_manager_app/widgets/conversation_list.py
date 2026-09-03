@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from llm_engine.domain.models import Conversation, ConversationSummary, Project
+from llm_engine.domain.models import Conversation, ConversationSummary, ModelRef, Project
 
 # Ellipsis = All folders; None = ungrouped.
 _UNFILTERED: EllipsisType = ...
@@ -39,6 +39,10 @@ class ConversationStore(Protocol):
     def delete_conversation(self, id: int) -> None: ...
     def move(self, id: int, project_id: int | None) -> None: ...
     def list_projects(self) -> list[Project]: ...
+    def create_project(
+        self, name: str, instructions: str = "", model: ModelRef | None = None
+    ) -> Project: ...
+    def delete_project(self, id: int) -> None: ...
 
 
 class ConversationListModel(QAbstractListModel):

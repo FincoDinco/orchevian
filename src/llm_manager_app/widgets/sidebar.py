@@ -1,9 +1,8 @@
-"""Sidebar: Chats folders (All / projects / Ungrouped) and Models. Templates stay hidden."""
+"""Sidebar: Chats folders (All / projects / Ungrouped) and Models."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
 from PySide6.QtCore import QModelIndex, QPoint, Qt, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
@@ -16,7 +15,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from llm_engine.domain.models import ModelRef, Project
+from llm_engine.domain.models import ModelRef
+from llm_manager_app.widgets.conversation_list import ConversationStore
 from llm_manager_app.widgets.project_sheet import ProjectSheet
 
 CHATS = "chats"
@@ -45,14 +45,6 @@ class SidebarSelection:
     project_name: str | None = None
 
 
-class ProjectLibrary(Protocol):
-    def list_projects(self) -> list[Project]: ...
-    def create_project(
-        self, name: str, instructions: str = "", model: ModelRef | None = None
-    ) -> Project: ...
-    def delete_project(self, id: int) -> None: ...
-
-
 def _item(label: str, kind: str) -> QStandardItem:
     item = QStandardItem(label)
     item.setEditable(False)
@@ -66,7 +58,7 @@ class Sidebar(QWidget):
     project_created = Signal(int)
     project_deleted = Signal(int)
 
-    def __init__(self, parent: QWidget | None = None, *, library: ProjectLibrary) -> None:
+    def __init__(self, parent: QWidget | None = None, *, library: ConversationStore) -> None:
         super().__init__(parent)
         self.setObjectName("sidebar")
         self._library = library
@@ -184,6 +176,7 @@ class Sidebar(QWidget):
 
     def _rebuild(self) -> None:
         self._model.clear()
+        self._chats_item = self._all_item = self._ungrouped_item = self._models_item = None
         self._project_items = {}
         root = self._model.invisibleRootItem()
         if root is None:
@@ -193,23 +186,24 @@ class Sidebar(QWidget):
         chats.setFlags(Qt.ItemFlag.ItemIsEnabled)
         all_item = _item("All", _KIND_ALL)
         chats.appendRow(all_item)
+        project_items: dict[int, QStandardItem] = {}
         for project in self._library.list_projects():
             item = _item(f"Project: {project.name}", _KIND_PROJECT)
             item.setData(project.id, _ID_ROLE)
             item.setData(project.name, _NAME_ROLE)
             chats.appendRow(item)
-            self._project_items[project.id] = item
+            project_items[project.id] = item
         ungrouped = _item("Ungrouped", _KIND_UNGROUPED)
         chats.appendRow(ungrouped)
-        root.appendRow(chats)
-
         models = _item("Models", _KIND_MODELS)
-        root.appendRow(models)
 
         self._chats_item = chats
         self._all_item = all_item
         self._ungrouped_item = ungrouped
         self._models_item = models
+        self._project_items = project_items
+        root.appendRow(chats)
+        root.appendRow(models)
         self._view.expand(chats.index())
 
     def _set_current(self, index: QModelIndex) -> None:
@@ -266,7 +260,11 @@ class Sidebar(QWidget):
             return
         kind = str(current.data(_KIND_ROLE) or "")
         if kind == _KIND_CHATS:
-            self._set_current(self._index_for(_KIND_ALL))
+            prev_kind = str(_previous.data(_KIND_ROLE) or "") if _previous.isValid() else ""
+            if prev_kind in {_KIND_ALL, _KIND_PROJECT, _KIND_UNGROUPED}:
+                self._set_current(_previous)
+            else:
+                self._set_current(self._index_for(_KIND_ALL))
             return
         selection = self._selection_from_index(current)
         if selection.section != self._last_section:

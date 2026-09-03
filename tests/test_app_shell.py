@@ -461,6 +461,59 @@ def test_project_sheet_parses_optional_model() -> None:
         sheet.close()
 
 
+def test_project_sheet_accept_invalid_and_blank_new_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    try:
+        _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QDialog, QLineEdit, QMessageBox
+
+    from llm_manager_app.widgets.project_sheet import ProjectSheet
+
+    warned: list[str] = []
+
+    def fake_warning(
+        _parent: object, _title: str, text: str, *args: object, **kwargs: object
+    ) -> object:
+        warned.append(text)
+        return QMessageBox.StandardButton.Ok
+
+    monkeypatch.setattr(
+        "llm_manager_app.widgets.project_sheet.QMessageBox.warning",
+        fake_warning,
+    )
+
+    sheet = ProjectSheet()
+    try:
+        name_edit = sheet.findChild(QLineEdit, "projectName")
+        model_edit = sheet.findChild(QLineEdit, "projectModel")
+        assert name_edit is not None and model_edit is not None
+        sheet.accept()
+        assert sheet.result() != int(QDialog.DialogCode.Accepted)
+        assert warned == []
+
+        name_edit.setText("Work")
+        model_edit.setText("openai/foo")
+        sheet.accept()
+        assert sheet.result() != int(QDialog.DialogCode.Accepted)
+        assert warned
+    finally:
+        sheet.close()
+
+    window, store, library = _window(tmp_path)
+    try:
+        assert window._sidebar.new_project(name="   ") is None
+        assert library.list_projects() == []
+        assert all("Project:" not in label for label in _sidebar_labels(window._sidebar))
+    finally:
+        window.close()
+        if store is not None:
+            store.close()
+
+
 def test_new_chat_seeds_selected_project(tmp_path: Path) -> None:
     try:
         _qapp()
@@ -576,6 +629,60 @@ def test_move_conversation_and_delete_project_keeps_chats(tmp_path: Path) -> Non
         labels = _sidebar_labels(window._sidebar)
         assert "Project: Home" not in labels
         assert "Project: Work" in labels
+    finally:
+        window.close()
+        if store is not None:
+            store.close()
+
+
+def test_new_chat_from_models_does_not_seed_last_project(tmp_path: Path) -> None:
+    try:
+        _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from llm_engine.domain.models import BackendName, ModelRef
+    from llm_manager_app.widgets.sidebar import MODELS
+
+    window, store, library = _window(tmp_path)
+    try:
+        window.show()
+        window._sidebar.new_project(
+            name="Coding",
+            instructions="You are terse.",
+            model=ModelRef(BackendName.OLLAMA, "qwen3:8b"),
+        )
+        window._sidebar.select_section(MODELS)
+        window._shortcut_new.activated.emit()
+        cid = window._list.selected_id()
+        assert cid is not None
+        loaded = library.get_conversation(cid)
+        assert loaded.summary.project_id is None
+        assert loaded.system_prompt == ""
+        assert window._sidebar.current_section() == "chats"
+    finally:
+        window.close()
+        if store is not None:
+            store.close()
+
+
+def test_sidebar_left_from_project_keeps_folder(tmp_path: Path) -> None:
+    try:
+        _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    window, store, _library = _window(tmp_path)
+    try:
+        window.show()
+        pid = window._sidebar.new_project(name="Work")
+        assert pid is not None
+        window._sidebar.select_project(pid)
+        previous = window._sidebar._view.currentIndex()
+        chats = window._sidebar._chats_item
+        assert chats is not None
+        window._sidebar._on_current_changed(chats.index(), previous)
+        assert window._sidebar.current_selection().project_id == pid
     finally:
         window.close()
         if store is not None:

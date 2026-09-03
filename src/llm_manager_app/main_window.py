@@ -136,7 +136,9 @@ class MainWindow(QMainWindow):
             self._store = None
         super().closeEvent(event)
 
-    def _on_section(self, _key: str) -> None:
+    def _on_section(self, key: str) -> None:
+        if key == MODELS:
+            self._list.set_project_filter(...)
         self._sync_title()
 
     def _on_filter(self, selection: object) -> None:
