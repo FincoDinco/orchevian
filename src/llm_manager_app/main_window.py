@@ -181,18 +181,34 @@ class MainWindow(QMainWindow):
             catalog_thread.quit()
             # Ollama is_available/list_models can block for the 5s client timeout.
             catalog_done = catalog_thread.wait(6000)
-            if not catalog_done:
-                # A running QThread must not be destroyed with the window.
-                catalog_thread.setParent(None)
-            self._catalog_thread = None
+            if catalog_done:
+                self._catalog_thread = None
+            else:
+                # Keep Python refs; dropping them here lets GC kill a running QThread.
+                app = QApplication.instance()
+                catalog_thread.setParent(app)
+                catalog_thread.finished.connect(self._on_catalog_finished)
+                if catalog_thread.isFinished():
+                    self._on_catalog_finished()
         if self._owns_registry and catalog_done:
             self._registry.close()
+            self._owns_registry = False
         store = self._store
         closer = getattr(store, "close", None)
         if callable(closer):
             closer()
             self._store = None
         super().closeEvent(event)
+
+    def _on_catalog_finished(self) -> None:
+        thread = self._catalog_thread
+        if thread is None:
+            return
+        if self._owns_registry:
+            self._registry.close()
+            self._owns_registry = False
+        self._catalog_thread = None
+        thread.deleteLater()
 
     def _on_section(self, _key: str) -> None:
         self._sync_title()
