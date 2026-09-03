@@ -204,6 +204,9 @@ sdist = { url = "https://files.pythonhosted.org/packages/1a/71/5ecdad726b87527b3
 name = "llm-engine"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "httpx" },
+]
 
 [package.optional-dependencies]
 gguf = [
@@ -221,6 +224,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "llama-cpp-python", marker = "extra == 'gguf'" },
     { name = "mlx-lm", marker = "extra == 'mlx'" },
 ]

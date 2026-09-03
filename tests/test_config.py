@@ -167,7 +167,7 @@ def test_cli_help_exits_zero() -> None:
 def test_unimplemented_commands_fail_without_writing(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
     db_path = tmp_path / "data.db"
-    for command in ("chat", "models", "serve", "migrate"):
+    for command in ("chat", "serve", "migrate"):
         assert main([command, "--config", str(cfg_path), "--db", str(db_path)]) == 1
     assert not cfg_path.exists()
 
