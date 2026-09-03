@@ -38,6 +38,7 @@ class FakeBackend:
         block_generate: threading.Event | None = None,
         fail_after: int | None = None,
         error: BaseException | None = None,
+        ignore_cancel: bool = False,
     ) -> None:
         self.name = name
         self.chunks = tuple(chunks)
@@ -47,6 +48,7 @@ class FakeBackend:
         self._block_load = block_load
         self._block_generate = block_generate
         self._fail_after = fail_after
+        self._ignore_cancel = ignore_cancel
         self._error = error if error is not None else EngineError(
             "load_failed", "fake generate failed"
         )
@@ -86,7 +88,7 @@ class FakeBackend:
             raise self._error
         yielded = 0
         for chunk in self.chunks:
-            if cancel.is_set():
+            if cancel.is_set() and not self._ignore_cancel:
                 return
             yield chunk
             yielded += 1
@@ -94,7 +96,7 @@ class FakeBackend:
                 raise self._error
             if self._block_generate is not None and yielded == 1:
                 while not self._block_generate.is_set():
-                    if cancel.is_set():
+                    if cancel.is_set() and not self._ignore_cancel:
                         return
                     self._block_generate.wait(timeout=0.05)
 

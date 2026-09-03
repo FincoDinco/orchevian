@@ -100,6 +100,17 @@ class ModelSession:
             self._generating = False
             self._lock.release()
 
+    def force_unload(self) -> None:
+        # generate() holds `_lock` for the whole stream; waiting would hang the GUI worker.
+        handle = self._handle
+        backend = self._backend
+        self._handle = None
+        self._backend = None
+        if handle is None or backend is None:
+            return
+        backend.unload(handle)
+        _log.info("unloaded %s", handle.model.ref.id)
+
     def generate(
         self,
         messages: list[ChatTurn],

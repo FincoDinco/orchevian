@@ -34,6 +34,7 @@ KEY_APPEARANCE = "appearance"
 KEY_RETURN_SENDS = "return_sends"
 KEY_INSPECTOR_OPEN = "inspector_open"
 KEY_LAST_CONVERSATION_ID = "last_conversation_id"
+DEFAULT_APPEARANCE = "dark"
 
 _SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("Ctrl+N", "New chat"),
@@ -80,6 +81,20 @@ def as_int(value: object) -> int | None:
 
 def make_settings() -> QSettings:
     return QSettings(ORG_NAME, APP_NAME)
+
+
+def appearance_theme(settings: QSettings) -> str:
+    theme = str(settings.value(KEY_APPEARANCE, DEFAULT_APPEARANCE) or DEFAULT_APPEARANCE)
+    theme = theme.strip().lower()
+    return theme if theme in {"light", "dark"} else DEFAULT_APPEARANCE
+
+
+def ensure_appearance(settings: QSettings) -> str:
+    theme = appearance_theme(settings)
+    stored = str(settings.value(KEY_APPEARANCE, "") or "").strip().lower()
+    if stored not in {"light", "dark"}:
+        settings.setValue(KEY_APPEARANCE, theme)
+    return theme
 
 
 def _native(seq: str) -> str:
@@ -140,9 +155,7 @@ class SettingsDialog(QDialog):
         self.reload()
 
     def reload(self) -> None:
-        appearance = str(self._settings.value(KEY_APPEARANCE, "") or "").strip().lower()
-        if appearance not in {"light", "dark"}:
-            appearance = "dark"
+        appearance = appearance_theme(self._settings)
         blocked = self._appearance.blockSignals(True)
         self._appearance.setCurrentIndex(0 if appearance == "dark" else 1)
         self._appearance.blockSignals(blocked)
@@ -285,7 +298,7 @@ class SettingsDialog(QDialog):
             self._models_error.show()
             return
         try:
-            # Engine config.json (K19); never QSettings.
+            # Engine config.json; never QSettings.
             self._config_set(model_dir=path)
         except Exception as exc:
             self._models_error.setText(str(exc))

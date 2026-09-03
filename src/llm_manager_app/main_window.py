@@ -18,7 +18,6 @@ from llm_manager_app.widgets.chat_view import ChatView
 from llm_manager_app.widgets.conversation_list import ConversationList, ConversationStore
 from llm_manager_app.widgets.settings import (
     APP_NAME,
-    KEY_APPEARANCE,
     KEY_INSPECTOR_OPEN,
     KEY_LAST_CONVERSATION_ID,
     KEY_RETURN_SENDS,
@@ -27,6 +26,7 @@ from llm_manager_app.widgets.settings import (
     ShortcutsDialog,
     as_bool,
     as_int,
+    ensure_appearance,
     make_settings,
 )
 from llm_manager_app.widgets.sidebar import CHATS, MODELS, Sidebar
@@ -65,8 +65,7 @@ class MainWindow(QMainWindow):
                 qt_app.setOrganizationName(ORG_NAME)
             if not qt_app.applicationName():
                 qt_app.setApplicationName(APP_NAME)
-            theme = str(self._settings.value(KEY_APPEARANCE, "") or "").strip().lower()
-            apply_studio(qt_app, theme=theme if theme in {"light", "dark"} else None)
+            apply_studio(qt_app, theme=ensure_appearance(self._settings))
 
         self._owns_registry = registry is None
         self._registry = registry if registry is not None else BackendRegistry()

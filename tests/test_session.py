@@ -165,6 +165,26 @@ def test_unknown_backend_switch_keeps_loaded_model() -> None:
     assert fake.unload_calls == []
 
 
+def test_force_unload_drops_handle_while_generating() -> None:
+    model = _model(BackendName.OLLAMA, "fake")
+    gate = threading.Event()
+    session, fake = _session(model, chunks=("one", "two"), block_generate=gate)
+    session.load(model.ref)
+    gen = session.generate([ChatTurn("user", "hi")], GenerationParams(), threading.Event())
+    assert next(gen) == "one"
+    assert session.status().generating is True
+    session.force_unload()
+    assert session.status().loaded is None
+    assert len(fake.unload_calls) == 1
+    with pytest.raises(EngineError) as exc:
+        session.unload()
+    assert exc.value.code == "generating"
+    gate.set()
+    assert list(gen) == ["two"]
+    assert session.status().generating is False
+    assert session.status().loaded is None
+
+
 def test_unload_clears_loaded_handle() -> None:
     model = _model(BackendName.OLLAMA, "fake")
     session, fake = _session(model)

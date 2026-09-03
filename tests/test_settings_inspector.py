@@ -73,14 +73,14 @@ class ProbeFake(FakeBackend):
         self.messages.append(list(messages))
         yielded = 0
         for chunk in self.chunks:
-            if cancel.is_set():
+            if cancel.is_set() and not self._ignore_cancel:
                 return
             yield chunk
             yielded += 1
             if self.gate_after is not None and yielded >= self.gate_after:
                 self.entered.set()
                 while not self.release.is_set():
-                    if cancel.is_set():
+                    if cancel.is_set() and not self._ignore_cancel:
                         return
                     self.release.wait(timeout=0.05)
 
@@ -390,8 +390,10 @@ def test_inspector_unload_offer_after_timeout(tmp_path: Path) -> None:
         _wait_until(lambda: unload.isVisible(), timeout=2.0, message="unload offer never appeared")
         assert window._chat_view.is_streaming()
         unload.click()
-        app.processEvents()
-        assert restart.isVisible()
+        _wait_until(
+            lambda: probe.unload_ident is not None or not window._chat_view.is_streaming(),
+            message="unload did not run",
+        )
         probe.release.set()
         _wait_until(lambda: not window._chat_view.is_streaming(), message="did not stop")
         assert unload.isHidden()
@@ -533,5 +535,175 @@ def test_restart_shows_error_banner(tmp_path: Path) -> None:
         assert "Unload" in window._chat_view.banner_text()
     finally:
         probe.release.set()
+        window.close()
+        store.close()
+
+
+def test_force_unload_when_generate_ignores_cancel(tmp_path: Path) -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QPushButton
+
+    gui_ident = threading.get_ident()
+    fake = ProbeFake(
+        models=[LOCAL],
+        chunks=tuple(["."] * 8),
+        gate_after=1,
+        ignore_cancel=True,
+    )
+    window, store, library, probe = _window(tmp_path, fake=fake)
+    try:
+        cid = library.create_conversation(model=REF).summary.id
+        window._list.refresh(select_id=cid)
+        window.show()
+        app.processEvents()
+        window._chat_view.inspector().set_unload_offer_ms(10)
+        window._chat_view.composer().set_text("stuck")
+        window._chat_view.composer().submit()
+        assert probe.entered.wait(2.0)
+        unload = window.findChild(QPushButton, "unloadButton")
+        _wait_until(lambda: unload is not None and unload.isVisible(), message="no unload offer")
+        assert unload is not None
+        unload.click()
+        _wait_until(lambda: len(probe.unload_calls) >= 1, message="backend unload never ran")
+        _wait_until(lambda: not window._chat_view.is_streaming(), message="stream UI still busy")
+        assert probe.unload_ident is not None and probe.unload_ident != gui_ident
+        assert window._chat_view.composer().isEnabled()
+    finally:
+        probe.release.set()
+        window.close()
+        store.close()
+
+
+def test_system_prompt_flush_on_send_before_debounce(tmp_path: Path) -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QPlainTextEdit
+
+    window, store, library, probe = _window(tmp_path)
+    try:
+        cid = library.create_conversation(model=REF).summary.id
+        window._list.refresh(select_id=cid)
+        window.show()
+        app.processEvents()
+        prompt = window.findChild(QPlainTextEdit, "systemPromptEdit")
+        assert prompt is not None
+        prompt.setPlainText("You are terse.")
+        assert library.get_conversation(cid).system_prompt == ""
+        window._chat_view.composer().set_text("hi")
+        window._chat_view.composer().submit()
+        _wait_until(lambda: not window._chat_view.is_streaming(), message="timed out")
+        assert library.get_conversation(cid).system_prompt == "You are terse."
+        assert probe.messages
+        assert probe.messages[0][0].role == "system"
+        assert probe.messages[0][0].content == "You are terse."
+    finally:
+        window.close()
+        store.close()
+
+
+def test_system_prompt_flush_on_conversation_switch(tmp_path: Path) -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QPlainTextEdit
+
+    window, store, library, _probe = _window(tmp_path)
+    try:
+        first = library.create_conversation(model=REF).summary.id
+        second = library.create_conversation(model=REF).summary.id
+        window._list.refresh(select_id=first)
+        window.show()
+        app.processEvents()
+        prompt = window.findChild(QPlainTextEdit, "systemPromptEdit")
+        assert prompt is not None
+        prompt.setPlainText("Stay on rails.")
+        window._list.select_id(second)
+        app.processEvents()
+        assert library.get_conversation(first).system_prompt == "Stay on rails."
+        assert library.get_conversation(second).system_prompt == ""
+    finally:
+        window.close()
+        store.close()
+
+
+def test_settings_models_save_error_shows_label(tmp_path: Path) -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QLabel, QLineEdit, QPushButton
+
+    from llm_engine.domain.errors import EngineError
+    from llm_manager_app.widgets.settings import SettingsDialog
+
+    gui = _settings(tmp_path)
+    current = tmp_path / "models"
+
+    def config_get() -> dict:
+        return {"model_dir": str(current), "api_port": 8080, "db_path": str(tmp_path / "data.db")}
+
+    def config_set(**_fields: object) -> None:
+        raise EngineError("config_invalid", "disk full")
+
+    dialog = SettingsDialog(settings=gui, config_get=config_get, config_set=config_set)
+    try:
+        dialog.show()
+        app.processEvents()
+        edit = dialog.findChild(QLineEdit, "modelDirEdit")
+        save = dialog.findChild(QPushButton, "modelDirSave")
+        error = dialog.findChild(QLabel, "settingsError")
+        assert edit is not None and save is not None and error is not None
+        edit.setText("   ")
+        save.click()
+        app.processEvents()
+        assert not error.isHidden()
+        assert "non-empty" in error.text()
+        edit.setText(str(tmp_path / "other"))
+        save.click()
+        app.processEvents()
+        assert not error.isHidden()
+        assert "disk full" in error.text()
+        assert "model_dir" not in gui.allKeys()
+        assert "api_port" not in gui.allKeys()
+    finally:
+        dialog.close()
+
+
+def test_missing_appearance_defaults_to_dark(tmp_path: Path) -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QComboBox
+
+    from llm_manager_app.tokens import DARK, qss
+    from llm_manager_app.widgets.settings import KEY_APPEARANCE, SettingsDialog
+
+    gui = _settings(tmp_path)
+    window, store, _library, _probe = _window(tmp_path, settings=gui)
+    try:
+        window.show()
+        app.processEvents()
+        assert gui.value(KEY_APPEARANCE) == "dark"
+        assert qss(DARK) in (app.styleSheet() or "")
+        dialog = SettingsDialog(settings=gui)
+        try:
+            combo = dialog.findChild(QComboBox, "appearanceCombo")
+            assert combo is not None
+            assert combo.currentData() == "dark"
+        finally:
+            dialog.close()
+    finally:
         window.close()
         store.close()

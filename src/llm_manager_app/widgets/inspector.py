@@ -30,7 +30,7 @@ def _matching_preset(params: GenerationParams) -> str | None:
 
 
 class Inspector(QWidget):
-    system_prompt_changed = Signal(str)
+    system_prompt_changed = Signal(int, str)
     unload_requested = Signal()
     restart_requested = Signal()
 
@@ -153,8 +153,14 @@ class Inspector(QWidget):
             max_tokens=int(self._max_tokens.value()),
         )
 
-    def set_conversation(self, conversation: Conversation | None) -> None:
+    def flush_prompt(self) -> None:
         self._prompt_timer.stop()
+        self._emit_prompt()
+
+    def set_conversation(self, conversation: Conversation | None) -> None:
+        incoming = None if conversation is None else conversation.summary.id
+        same = incoming is not None and incoming == self._cid
+        self.flush_prompt()
         if conversation is None:
             self._cid = None
             self._saved_prompt = ""
@@ -165,11 +171,12 @@ class Inspector(QWidget):
             self.set_generating(False)
             self.setEnabled(False)
             return
-        self._cid = conversation.summary.id
-        self._saved_prompt = conversation.system_prompt
-        blocked = self._prompt.blockSignals(True)
-        self._prompt.setPlainText(conversation.system_prompt)
-        self._prompt.blockSignals(blocked)
+        self._cid = incoming
+        if not same:
+            self._saved_prompt = conversation.system_prompt
+            blocked = self._prompt.blockSignals(True)
+            self._prompt.setPlainText(conversation.system_prompt)
+            self._prompt.blockSignals(blocked)
         last = next((m for m in reversed(conversation.messages) if m.role == "assistant"), None)
         if last is not None:
             self.set_last_turn(chunks=None, elapsed=last.elapsed_s, tps=last.tokens_per_sec)
@@ -246,7 +253,7 @@ class Inspector(QWidget):
         if text == self._saved_prompt:
             return
         self._saved_prompt = text
-        self.system_prompt_changed.emit(text)
+        self.system_prompt_changed.emit(self._cid, text)
 
     def _on_offer_timeout(self) -> None:
         if not self._generating:

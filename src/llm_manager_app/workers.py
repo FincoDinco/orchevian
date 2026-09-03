@@ -62,7 +62,7 @@ class ChatWorker(QObject):
             self.unload_failed.emit("not_found", "no session")
             return
         try:
-            session.unload()
+            session.force_unload()
         except EngineError as exc:
             self.unload_failed.emit(exc.code, str(exc))
             return

@@ -220,6 +220,7 @@ class ChatView(QWidget):
             return
         if not self._transcript.turns():
             return
+        self._inspector.flush_prompt()
         self._pending = ("regenerate", cid, "")
         self._generating_id = cid
         self._buffer = ""
@@ -316,7 +317,18 @@ class ChatView(QWidget):
         self.turn_finished.emit(conversation_id)
 
     def on_unloaded(self) -> None:
+        cid = self._generating_id
+        self._generating_id = None
+        self._pending = None
         self._inspector.set_generating(False)
+        if cid is not None and self._transcript.is_streaming():
+            self._transcript.keep_stream()
+            if self._cid == cid:
+                self._error_plain_id = cid
+        self._buffer = ""
+        self._sync_enabled()
+        if cid is not None:
+            self.turn_finished.emit(cid)
 
     def on_unload_failed(self, code: str, message: str) -> None:
         if self._generating_id is not None:
@@ -330,6 +342,7 @@ class ChatView(QWidget):
             return
         if not text.strip():
             return
+        self._inspector.flush_prompt()
         self._pending = ("send", cid, text)
         self._generating_id = cid
         self._buffer = ""
@@ -344,10 +357,8 @@ class ChatView(QWidget):
         self._sync_enabled()
         self.send_requested.emit(cid, text, self._inspector.params())
 
-    def _on_system_prompt(self, text: str) -> None:
-        if self._cid is None:
-            return
-        self.system_prompt_changed.emit(self._cid, text)
+    def _on_system_prompt(self, conversation_id: int, text: str) -> None:
+        self.system_prompt_changed.emit(conversation_id, text)
 
     def _on_inspector_toggled(self, checked: bool) -> None:
         self.set_inspector_open(checked)
