@@ -92,7 +92,27 @@ def _qapp():
     return app
 
 
-def test_main_window_three_column_splitter() -> None:
+def _library(tmp_path: Path):
+    from llm_engine.store.library import LibraryService
+    from llm_engine.store.sqlite import SqliteStore
+
+    store = SqliteStore(tmp_path / "data.db")
+    return store, LibraryService(store)
+
+
+def _window(tmp_path: Path, registry: BackendRegistry | None = None, library=None):
+    from llm_manager_app.main_window import MainWindow
+
+    store = None
+    if library is None:
+        store, library = _library(tmp_path)
+    if registry is None:
+        registry = BackendRegistry([FakeBackend()])
+    window = MainWindow(registry=registry, library=library)
+    return window, store, library
+
+
+def test_main_window_three_column_splitter(tmp_path: Path) -> None:
     try:
         _qapp()
     except Exception as exc:
@@ -101,7 +121,7 @@ def test_main_window_three_column_splitter() -> None:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QLabel, QListView, QSplitter
 
-    from llm_manager_app.main_window import MainWindow
+    from llm_manager_app.widgets.conversation_list import ConversationList
     from llm_manager_app.widgets.sidebar import Sidebar
 
     class _NoList(FakeBackend):
@@ -109,7 +129,7 @@ def test_main_window_three_column_splitter() -> None:
             raise AssertionError("list_models must not run at window startup")
 
     registry = BackendRegistry([_NoList()])
-    window = MainWindow(registry=registry)
+    window, store, _library_svc = _window(tmp_path, registry=registry)
     try:
         splitter = window.findChild(QSplitter)
         assert splitter is not None
@@ -118,9 +138,11 @@ def test_main_window_three_column_splitter() -> None:
         list_pane = splitter.widget(1)
         detail = splitter.widget(2)
         assert isinstance(sidebar, Sidebar)
-        assert isinstance(list_pane, QListView)
-        model = list_pane.model()
-        assert model is None or model.rowCount() == 0
+        assert isinstance(list_pane, ConversationList)
+        view = list_pane.findChild(QListView, "conversationView")
+        assert view is not None
+        model = view.model()
+        assert model is not None and model.rowCount() == 0
         assert isinstance(detail, QLabel)
         text = detail.text()
         assert "loaded: none" in text
@@ -131,19 +153,19 @@ def test_main_window_three_column_splitter() -> None:
         assert not window.windowFlags() & Qt.WindowType.FramelessWindowHint
     finally:
         window.close()
+        if store is not None:
+            store.close()
 
 
-def test_sidebar_chats_and_models() -> None:
+def test_sidebar_chats_and_models(tmp_path: Path) -> None:
     try:
         _qapp()
     except Exception as exc:
         pytest.skip(f"no display: {exc}")
 
-    from llm_manager_app.main_window import MainWindow
     from llm_manager_app.widgets.sidebar import MODELS
 
-    registry = BackendRegistry([FakeBackend()])
-    window = MainWindow(registry=registry)
+    window, store, _library_svc = _window(tmp_path)
     try:
         sidebar = window._sidebar
         assert sidebar.current_section() == "chats"
@@ -155,6 +177,8 @@ def test_sidebar_chats_and_models() -> None:
         assert window.windowTitle() == "Models — LLM Manager"
     finally:
         window.close()
+        if store is not None:
+            store.close()
 
 
 def test_importing_app_does_not_load_banned_modules() -> None:
@@ -166,3 +190,171 @@ def test_importing_app_does_not_load_banned_modules() -> None:
     loaded = [name for name in banned if name in sys.modules and name not in before]
     assert loaded == []
     assert app_main.MainWindow is not None
+
+
+def test_app_sources_do_not_call_stream_generate() -> None:
+    offenders: list[str] = []
+    for path in APP_SRC.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "stream_generate" in text:
+            offenders.append(str(path.relative_to(ROOT)))
+    assert offenders == []
+
+
+def test_conversation_list_uses_summaries_not_messages(tmp_path: Path) -> None:
+    try:
+        _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QLabel, QLineEdit, QListView, QPushButton
+
+    store, library = _library(tmp_path)
+    secret = "UNIQUE_MESSAGE_BODY_SHOULD_NOT_APPEAR_IN_LIST"
+
+    class Guard:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def list_conversations(self, query: str | None = None):
+            self.calls.append("list_conversations")
+            return library.list_conversations(query=query)
+
+        def get_conversation(self, id: int):
+            self.calls.append("get_conversation")
+            raise AssertionError("list must not load messages")
+
+        def create_conversation(self):
+            self.calls.append("create_conversation")
+            return library.create_conversation()
+
+        def rename(self, id: int, title: str) -> None:
+            self.calls.append("rename")
+            library.rename(id, title)
+
+        def delete_conversation(self, id: int) -> None:
+            self.calls.append("delete_conversation")
+            library.delete_conversation(id)
+
+    guard = Guard()
+    created = library.create_conversation()
+    store.add_message(created.summary.id, "user", secret)
+    window, _owned, _svc = _window(tmp_path, library=guard)
+    try:
+        window.show()
+        assert "get_conversation" not in guard.calls
+        assert "list_conversations" in guard.calls
+        view = window.findChild(QListView, "conversationView")
+        assert view is not None
+        model = view.model()
+        assert model is not None
+        assert model.rowCount() == 1
+        assert model.data(model.index(0, 0)) == "New Chat"
+        assert secret not in (model.data(model.index(0, 0)) or "")
+        assert window.windowTitle() == "New Chat"
+
+        search = window.findChild(QLineEdit, "conversationSearch")
+        assert search is not None
+        search.setText("nope")
+        assert model.rowCount() == 0
+        empty = window.findChild(QLabel, "listEmpty")
+        assert empty is not None
+        assert "No matching conversations" in empty.text()
+        assert "get_conversation" not in guard.calls
+
+        search.clear()
+        btn = window.findChild(QPushButton, "newChatButton")
+        assert btn is not None
+        btn.click()
+        assert "create_conversation" in guard.calls
+        assert model.rowCount() == 2
+        assert "get_conversation" not in guard.calls
+    finally:
+        window.close()
+        store.close()
+
+
+def test_conversation_crud_search_rename_delete_and_empty(tmp_path: Path) -> None:
+    try:
+        _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtGui import QKeySequence, QShortcut
+    from PySide6.QtWidgets import QLabel, QLineEdit, QListView
+
+    window, store, library = _window(tmp_path)
+    try:
+        window.show()
+        pane = window._list
+        empty = window.findChild(QLabel, "listEmpty")
+        assert empty is not None
+        assert "No conversations" in empty.text()
+        assert window.windowTitle() == "LLM Manager"
+
+        first = pane.new_chat()
+        pane.rename_selected("Alpha notes")
+        second = pane.new_chat()
+        pane.rename_selected("Beta work")
+        assert {row.title for row in library.list_conversations()} == {
+            "Alpha notes",
+            "Beta work",
+        }
+        view = window.findChild(QListView, "conversationView")
+        assert view is not None
+        model = view.model()
+        assert model is not None
+        assert model.rowCount() == 2
+        assert window.windowTitle() == "Beta work"
+
+        search = window.findChild(QLineEdit, "conversationSearch")
+        assert search is not None
+        search.setText("alpha")
+        assert model.rowCount() == 1
+        assert model.data(model.index(0, 0)) == "Alpha notes"
+        pane.select_id(first)
+        assert window.windowTitle() == "Alpha notes"
+
+        search.clear()
+        pane.select_id(second)
+        pane.delete_selected(confirmed=True)
+        titles = {row.title for row in library.list_conversations()}
+        assert titles == {"Alpha notes"}
+        assert pane.selected_id() == first
+        assert window.windowTitle() == "Alpha notes"
+
+        pane.delete_selected(confirmed=True)
+        assert library.list_conversations() == []
+        assert "No conversations" in empty.text()
+        assert window.windowTitle() == "LLM Manager"
+
+        shortcuts = window.findChildren(QShortcut)
+        keys = [s.key() for s in shortcuts]
+        assert any(k.matches(QKeySequence(QKeySequence.StandardKey.New)) for k in keys)
+        assert any(k.matches(QKeySequence(QKeySequence.StandardKey.Find)) for k in keys)
+    finally:
+        window.close()
+        if store is not None:
+            store.close()
+
+
+def test_new_chat_shortcut_switches_to_chats(tmp_path: Path) -> None:
+    try:
+        _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from llm_manager_app.widgets.sidebar import MODELS
+
+    window, store, _library_svc = _window(tmp_path)
+    try:
+        window._sidebar.select_section(MODELS)
+        assert window.windowTitle() == "Models — LLM Manager"
+        window._shortcut_new.activated.emit()
+        assert window._sidebar.current_section() == "chats"
+        assert window._list.selected_title() == "New Chat"
+        assert window.windowTitle() == "New Chat"
+    finally:
+        window.close()
+        if store is not None:
+            store.close()

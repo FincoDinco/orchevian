@@ -1,4 +1,4 @@
-"""QMainWindow three-column shell. Chrome only: no inference, no composer."""
+"""QMainWindow three-column shell. Conversation list in column 2; no composer."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
-    QListView,
     QMainWindow,
     QSplitter,
     QWidget,
@@ -17,6 +16,7 @@ from PySide6.QtWidgets import (
 from llm_engine.backends.registry import BackendRegistry
 from llm_engine.services.session import ModelSession
 from llm_manager_app.tokens import apply_studio
+from llm_manager_app.widgets.conversation_list import ConversationList, ConversationStore
 from llm_manager_app.widgets.sidebar import CHATS, MODELS, Sidebar
 
 _TITLE = "LLM Manager"
@@ -32,11 +32,22 @@ def _status_text(session: ModelSession) -> str:
     )
 
 
+def _default_library() -> tuple[ConversationStore, object]:
+    # Opened only when the caller did not inject a LibraryService (production).
+    from llm_engine.config import resolve_db_path
+    from llm_engine.store.library import LibraryService
+    from llm_engine.store.sqlite import SqliteStore
+
+    store = SqliteStore(resolve_db_path())
+    return LibraryService(store), store
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
         *,
         registry: BackendRegistry | None = None,
+        library: ConversationStore | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -52,6 +63,11 @@ class MainWindow(QMainWindow):
         self._registry = registry if registry is not None else BackendRegistry()
         self._session = ModelSession(self._registry)
 
+        self._store: object | None = None
+        if library is None:
+            library, self._store = _default_library()
+        self._library = library
+
         shell = QWidget(self)
         shell.setObjectName("shell")
         splitter = QSplitter(Qt.Orientation.Horizontal, shell)
@@ -61,9 +77,9 @@ class MainWindow(QMainWindow):
         self._sidebar = Sidebar(splitter)
         self._sidebar.section_changed.connect(self._on_section)
 
-        self._list = QListView(splitter)
-        self._list.setObjectName("listPane")
-        self._list.setSelectionMode(QListView.SelectionMode.SingleSelection)
+        self._list = ConversationList(splitter, library=self._library)
+        self._list.selected_id_changed.connect(lambda *_: self._sync_title())
+        self._list.chat_created.connect(self._on_chat_created)
 
         self._detail = QLabel(splitter)
         self._detail.setObjectName("detailPane")
@@ -92,14 +108,33 @@ class MainWindow(QMainWindow):
         self._shortcut_chats.activated.connect(lambda: self._sidebar.select_section(CHATS))
         self._shortcut_models = QShortcut(QKeySequence("Ctrl+2"), self)
         self._shortcut_models.activated.connect(lambda: self._sidebar.select_section(MODELS))
+        self._shortcut_new = QShortcut(QKeySequence.StandardKey.New, self)
+        self._shortcut_new.activated.connect(self._list.new_chat)
+        self._shortcut_find = QShortcut(QKeySequence.StandardKey.Find, self)
+        self._shortcut_find.activated.connect(self._list.focus_search)
+
+        self._sync_title()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._owns_registry:
             self._registry.close()
+        store = self._store
+        closer = getattr(store, "close", None)
+        if callable(closer):
+            closer()
+            self._store = None
         super().closeEvent(event)
 
-    def _on_section(self, key: str) -> None:
-        if key == MODELS:
+    def _on_section(self, _key: str) -> None:
+        self._sync_title()
+
+    def _on_chat_created(self, _cid: int) -> None:
+        self._sidebar.select_section(CHATS)
+        self._sync_title()
+
+    def _sync_title(self) -> None:
+        if self._sidebar.current_section() == MODELS:
             self.setWindowTitle(f"Models — {_TITLE}")
-        else:
-            self.setWindowTitle(_TITLE)
+            return
+        title = self._list.selected_title()
+        self.setWindowTitle(title if title else _TITLE)

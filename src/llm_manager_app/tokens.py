@@ -78,10 +78,36 @@ def qss(palette: StudioPalette) -> str:
         background-color: {palette.selection};
         color: {palette.text};
     }}
-    QWidget#listPane, QListView#listPane {{
+    QWidget#listPane, QListView#listPane, QListView#conversationView {{
         background-color: {palette.canvas};
         color: {palette.text};
         border: none;
+        outline: none;
+    }}
+    QListView#conversationView::item {{
+        padding: 8px;
+        border-radius: {palette.radius_control}px;
+    }}
+    QListView#conversationView::item:selected {{
+        background-color: {palette.selection};
+        color: {palette.text};
+    }}
+    QLineEdit#conversationSearch {{
+        background-color: {palette.elevated};
+        color: {palette.text};
+        border: none;
+        border-radius: {palette.radius_control}px;
+        padding: 6px 8px;
+    }}
+    QPushButton#newChatButton {{
+        background-color: transparent;
+        color: {palette.accent};
+        border: none;
+        padding: 6px 8px;
+    }}
+    QLabel#listEmpty {{
+        color: {palette.secondary};
+        background: transparent;
     }}
     QWidget#detailPane, QLabel#detailPane {{
         background-color: {palette.canvas};
