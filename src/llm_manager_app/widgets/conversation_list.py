@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import EllipsisType
 from typing import Any, Protocol
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QPoint, Qt, Signal
@@ -21,14 +22,27 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from llm_engine.domain.models import Conversation, ConversationSummary
+from llm_engine.domain.models import Conversation, ConversationSummary, ModelRef, Project
+
+# Ellipsis = All folders; None = ungrouped.
+_UNFILTERED: EllipsisType = ...
 
 
 class ConversationStore(Protocol):
-    def list_conversations(self, query: str | None = None) -> list[ConversationSummary]: ...
-    def create_conversation(self) -> Conversation: ...
+    def list_conversations(
+        self,
+        project_id: int | None | EllipsisType = ...,
+        query: str | None = None,
+    ) -> list[ConversationSummary]: ...
+    def create_conversation(self, project_id: int | None = None) -> Conversation: ...
     def rename(self, id: int, title: str) -> None: ...
     def delete_conversation(self, id: int) -> None: ...
+    def move(self, id: int, project_id: int | None) -> None: ...
+    def list_projects(self) -> list[Project]: ...
+    def create_project(
+        self, name: str, instructions: str = "", model: ModelRef | None = None
+    ) -> Project: ...
+    def delete_project(self, id: int) -> None: ...
 
 
 class ConversationListModel(QAbstractListModel):
@@ -83,6 +97,8 @@ class ConversationList(QWidget):
         super().__init__(parent)
         self.setObjectName("listPane")
         self._library = library
+        self._project_id: int | None | EllipsisType = _UNFILTERED
+        self._project_name: str | None = None
 
         self._search = QLineEdit(self)
         self._search.setObjectName("conversationSearch")
@@ -143,6 +159,18 @@ class ConversationList(QWidget):
 
         self.refresh()
 
+    def set_project_filter(
+        self,
+        project_id: int | None | EllipsisType = _UNFILTERED,
+        *,
+        project_name: str | None = None,
+    ) -> None:
+        if project_id == self._project_id and project_name == self._project_name:
+            return
+        self._project_id = project_id
+        self._project_name = project_name
+        self.refresh()
+
     def focus_search(self) -> None:
         self._search.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self._search.selectAll()
@@ -181,7 +209,12 @@ class ConversationList(QWidget):
         keep = self.selected_id() if select_id is None else select_id
         query = self._search.text().strip() or None
         # Summaries only — never get_conversation / messages.
-        rows = self._library.list_conversations(query=query)
+        if self._project_id is _UNFILTERED:
+            rows = self._library.list_conversations(query=query)
+        else:
+            rows = self._library.list_conversations(
+                project_id=self._project_id, query=query
+            )
         self._model.set_rows(rows)
         self._sync_empty(query, rows)
         if keep is not None and self._model.index_for_id(keep).isValid():
@@ -193,7 +226,11 @@ class ConversationList(QWidget):
         self._emit_selection()
 
     def new_chat(self) -> int:
-        created = self._library.create_conversation()
+        pid = self._project_id
+        if isinstance(pid, int):
+            created = self._library.create_conversation(project_id=pid)
+        else:
+            created = self._library.create_conversation()
         cid = created.summary.id
         self._search.blockSignals(True)
         self._search.clear()
@@ -240,6 +277,13 @@ class ConversationList(QWidget):
         self._library.delete_conversation(summary.id)
         self.refresh()
 
+    def move_selected(self, project_id: int | None) -> None:
+        summary = self.selected_summary()
+        if summary is None:
+            return
+        self._library.move(summary.id, project_id)
+        self.refresh()
+
     def _on_search(self, _text: str) -> None:
         self.refresh()
 
@@ -251,6 +295,13 @@ class ConversationList(QWidget):
             return
         menu = QMenu(self)
         menu.addAction("Rename", lambda: self.rename_selected())
+        move_menu = menu.addMenu("Move to")
+        move_menu.addAction("Ungrouped", lambda: self.move_selected(None))
+        for project in self._library.list_projects():
+            move_menu.addAction(
+                f"Project: {project.name}",
+                lambda pid=project.id: self.move_selected(pid),
+            )
         menu.addAction("Delete", lambda: self.delete_selected())
         menu.exec(self._view.viewport().mapToGlobal(pos))
 
@@ -260,6 +311,8 @@ class ConversationList(QWidget):
             return
         if query:
             self._empty.setText("No matching conversations.")
+        elif isinstance(self._project_id, int) and self._project_name:
+            self._empty.setText(f"New Chat in {self._project_name}")
         else:
             shortcut = QKeySequence(QKeySequence.StandardKey.New).toString(
                 QKeySequence.SequenceFormat.NativeText

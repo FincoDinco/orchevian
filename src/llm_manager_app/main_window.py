@@ -30,7 +30,15 @@ from llm_manager_app.widgets.settings import (
     ensure_appearance,
     make_settings,
 )
-from llm_manager_app.widgets.sidebar import CHATS, MODELS, Sidebar
+from llm_manager_app.widgets.sidebar import (
+    CHATS,
+    FOLDER_ALL,
+    FOLDER_PROJECT,
+    FOLDER_UNGROUPED,
+    MODELS,
+    Sidebar,
+    SidebarSelection,
+)
 from llm_manager_app.workers import (
     CatalogWorker,
     ChatWorker,
@@ -99,8 +107,9 @@ class MainWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(1)
 
-        self._sidebar = Sidebar(splitter)
+        self._sidebar = Sidebar(splitter, library=self._library)
         self._sidebar.section_changed.connect(self._on_section)
+        self._sidebar.filter_changed.connect(self._on_filter)
 
         self._list = ConversationList(splitter, library=self._library)
         self._list.selected_id_changed.connect(self._on_selected)
@@ -158,6 +167,8 @@ class MainWindow(QMainWindow):
         self._shortcut_models.activated.connect(lambda: self._sidebar.select_section(MODELS))
         self._shortcut_new = QShortcut(QKeySequence.StandardKey.New, self)
         self._shortcut_new.activated.connect(self._list.new_chat)
+        self._shortcut_new_project = QShortcut(QKeySequence("Ctrl+Shift+N"), self)
+        self._shortcut_new_project.activated.connect(self._sidebar.new_project)
         self._shortcut_find = QShortcut(QKeySequence.StandardKey.Find, self)
         self._shortcut_find.activated.connect(self._list.focus_search)
         self._shortcut_composer = QShortcut(QKeySequence("Ctrl+L"), self)
@@ -315,7 +326,22 @@ class MainWindow(QMainWindow):
         if self._chat_service is not None:
             self._chat_service.set_system_prompt(conversation_id, text)
 
-    def _on_section(self, _key: str) -> None:
+    def _on_section(self, key: str) -> None:
+        if key == MODELS:
+            self._list.set_project_filter(...)
+        self._sync_title()
+
+    def _on_filter(self, selection: object) -> None:
+        if not isinstance(selection, SidebarSelection):
+            return
+        if selection.folder == FOLDER_ALL:
+            self._list.set_project_filter(...)
+        elif selection.folder == FOLDER_UNGROUPED:
+            self._list.set_project_filter(None)
+        elif selection.folder == FOLDER_PROJECT:
+            self._list.set_project_filter(
+                selection.project_id, project_name=selection.project_name
+            )
         self._sync_title()
 
     def _on_chat_created(self, _cid: int) -> None:
