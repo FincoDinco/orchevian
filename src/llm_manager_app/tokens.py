@@ -63,18 +63,17 @@ def qss(palette: StudioPalette) -> str:
         color: {palette.text};
         font-family: "{family}";
     }}
-    QWidget#sidebar, QListWidget#sidebarNav {{
+    QWidget#sidebar, QTreeView#sidebarNav {{
         background-color: {palette.canvas};
         color: {palette.text};
         border: none;
         outline: none;
     }}
-    QListWidget#sidebarNav::item {{
-        padding: 8px 12px;
-        margin: 0 8px 4px 8px;
+    QTreeView#sidebarNav::item {{
+        padding: 6px 8px;
         border-radius: {palette.radius_control}px;
     }}
-    QListWidget#sidebarNav::item:selected {{
+    QTreeView#sidebarNav::item:selected {{
         background-color: {palette.selection};
         color: {palette.text};
     }}
