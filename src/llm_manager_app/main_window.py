@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QSplitter,
 
 from llm_engine.backends.registry import BackendRegistry
 from llm_engine.config import default_log_path
+from llm_engine.domain.models import ModelRef
 from llm_engine.services.chat import ChatService
 from llm_engine.services.session import ModelSession
 from llm_engine.store.library import LibraryService
@@ -30,7 +31,12 @@ from llm_manager_app.widgets.settings import (
     make_settings,
 )
 from llm_manager_app.widgets.sidebar import CHATS, MODELS, Sidebar
-from llm_manager_app.workers import ChatWorker, start_chat_worker
+from llm_manager_app.workers import (
+    CatalogWorker,
+    ChatWorker,
+    start_catalog_worker,
+    start_chat_worker,
+)
 
 _TITLE = "LLM Manager"
 
@@ -79,6 +85,8 @@ class MainWindow(QMainWindow):
         self._chat_service: ChatService | None = None
         self._worker: ChatWorker | None = None
         self._worker_thread: QThread | None = None
+        self._catalog: CatalogWorker
+        self._catalog_thread, self._catalog = start_catalog_worker(self._registry, self)
         if isinstance(library, LibraryService):
             self._chat_service = ChatService(library, self._session)
             self._worker_thread, self._worker = start_chat_worker(
@@ -103,6 +111,15 @@ class MainWindow(QMainWindow):
         self._chat_view.turn_finished.connect(self._on_turn_finished)
         self._chat_view.system_prompt_changed.connect(self._on_system_prompt)
         self._chat_view.inspector_open_changed.connect(self._on_inspector_open)
+        self._chat_view.model_selected.connect(self._on_model_selected)
+        self._chat_view.manage_models_requested.connect(
+            lambda: self._sidebar.select_section(MODELS)
+        )
+        self._chat_view.catalog_requested.connect(
+            self._catalog.list_models, Qt.ConnectionType.QueuedConnection
+        )
+        self._catalog.listed.connect(self._chat_view.set_catalog)
+        self._catalog.failed.connect(self._chat_view.on_catalog_failed)
         if self._worker is not None:
             # Queued: worker lives on a QThread after start_chat_worker.
             self._chat_view.send_requested.connect(self._worker.send)
@@ -186,14 +203,47 @@ class MainWindow(QMainWindow):
             thread.quit()
             thread.wait(2000)
             self._worker_thread = None
-        if self._owns_registry:
+        catalog_thread = self._catalog_thread
+        catalog_done = True
+        if catalog_thread is not None:
+            try:
+                self._chat_view.catalog_requested.disconnect(self._catalog.list_models)
+            except RuntimeError:
+                pass
+            try:
+                self._catalog.listed.disconnect()
+                self._catalog.failed.disconnect()
+            except RuntimeError:
+                pass
+            catalog_thread.quit()
+            catalog_done = catalog_thread.wait(6000)
+            if catalog_done:
+                self._catalog_thread = None
+            else:
+                app = QApplication.instance()
+                catalog_thread.setParent(app)
+                catalog_thread.finished.connect(self._on_catalog_finished)
+                if catalog_thread.isFinished():
+                    self._on_catalog_finished()
+        if self._owns_registry and catalog_done:
             self._registry.close()
+            self._owns_registry = False
         store = self._store
         closer = getattr(store, "close", None)
         if callable(closer):
             closer()
             self._store = None
         super().closeEvent(event)
+
+    def _on_catalog_finished(self) -> None:
+        thread = self._catalog_thread
+        if thread is None:
+            return
+        if self._owns_registry:
+            self._registry.close()
+            self._owns_registry = False
+        self._catalog_thread = None
+        thread.deleteLater()
 
     def _build_menus(self) -> None:
         settings_act = QAction("Settings…", self)
@@ -292,9 +342,19 @@ class MainWindow(QMainWindow):
         self._chat_view.set_conversation(getter(cid))
 
     def _on_stop(self, conversation_id: int) -> None:
-        # Set the cancel Event on the GUI thread; do not wait.
         if self._chat_service is not None:
             self._chat_service.stop(conversation_id)
+
+    def _on_model_selected(self, ref: object) -> None:
+        if not isinstance(ref, ModelRef):
+            return
+        cid = self._chat_view.conversation_id()
+        if cid is None or self._chat_service is None:
+            return
+        self._chat_service.set_model(cid, ref)
+        getter = getattr(self._library, "get_conversation", None)
+        if callable(getter):
+            self._chat_view.set_conversation(getter(cid))
 
     def _on_chat_accepted(self, cid: int, _kind: str) -> None:
         self._list.refresh(select_id=cid)

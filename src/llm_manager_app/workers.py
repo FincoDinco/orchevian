@@ -1,9 +1,10 @@
-"""QThread adapter around ChatService. Callbacks hop to Qt via queued signals."""
+"""QThread adapters around ChatService and BackendRegistry."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Q_ARG, QMetaObject, QObject, Qt, QThread, Signal, Slot
 
+from llm_engine.backends.registry import BackendRegistry
 from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import GenerationParams
 from llm_engine.services.chat import ChatService
@@ -155,6 +156,39 @@ def start_chat_worker(
 ) -> tuple[QThread, ChatWorker]:
     thread = QThread(parent)
     worker = ChatWorker(chat, session=session)
+    worker.moveToThread(thread)
+    thread.start()
+    return thread, worker
+
+
+class CatalogWorker(QObject):
+    """Lives on a QThread. ``registry.list_models`` must not run on the GUI thread."""
+
+    listed = Signal(object, object)
+    failed = Signal(str, str)
+
+    def __init__(self, registry: BackendRegistry) -> None:
+        super().__init__()
+        self._registry = registry
+
+    @Slot()
+    def list_models(self) -> None:
+        try:
+            models, availability = self._registry.list_models()
+        except EngineError as exc:
+            self.failed.emit(exc.code, str(exc))
+            return
+        except Exception as exc:
+            self.failed.emit("backend_unavailable", str(exc))
+            return
+        self.listed.emit(list(models), dict(availability))
+
+
+def start_catalog_worker(
+    registry: BackendRegistry, parent: QObject | None = None
+) -> tuple[QThread, CatalogWorker]:
+    thread = QThread(parent)
+    worker = CatalogWorker(registry)
     worker.moveToThread(thread)
     thread.start()
     return thread, worker

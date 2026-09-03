@@ -62,14 +62,16 @@ def qss(palette: StudioPalette) -> str:
     QMainWindow, QDialog, QWidget#shell {{
         background-color: {palette.canvas}; color: {palette.text}; font-family: "{family}";
     }}
-    QWidget#sidebar, QListWidget#sidebarNav, QWidget#listPane, QListView#listPane,
-    QListView#conversationView, QWidget#detailPane, QLabel#detailPane, QWidget#transcript {{
+    QWidget#sidebar, QListWidget#sidebarNav, QTreeView#sidebarNav, QWidget#listPane,
+    QListView#listPane, QListView#conversationView, QListWidget#modelsList,
+    QWidget#detailPane, QLabel#detailPane, QWidget#transcript {{
         background-color: {palette.canvas}; color: {palette.text}; border: none; outline: none;
     }}
-    QListWidget#sidebarNav::item {{
+    QListWidget#sidebarNav::item, QTreeView#sidebarNav::item {{
         padding: 8px 12px; margin: 0 8px 4px 8px; border-radius: {r}px;
     }}
-    QListWidget#sidebarNav::item:selected, QListView#conversationView::item:selected {{
+    QListWidget#sidebarNav::item:selected, QTreeView#sidebarNav::item:selected,
+    QListView#conversationView::item:selected {{
         background-color: {palette.selection}; color: {palette.text};
     }}
     QListView#conversationView::item {{ padding: 8px; border-radius: {r}px; }}
@@ -77,12 +79,13 @@ def qss(palette: StudioPalette) -> str:
         background-color: {palette.elevated}; color: {palette.text};
         border: none; border-radius: {r}px; padding: 6px 8px;
     }}
-    QPushButton#newChatButton {{
+    QPushButton#newChatButton, QPushButton#openModelsButton {{
         background-color: transparent; color: {palette.accent}; border: none; padding: 6px 8px;
     }}
-    QLabel#listEmpty, QLabel#chatEmpty, QLabel#lastTurnLabel, QLabel#settingsHint {{
+    QLabel#listEmpty, QLabel#chatEmpty, QLabel#modelEmpty, QLabel#lastTurnLabel, QLabel#settingsHint {{
         color: {palette.secondary}; background: transparent;
     }}
+    QToolButton#modelPicker {{ background: transparent; color: {palette.text}; border: none; }}
     QTextBrowser#transcriptHistory, QPlainTextEdit#transcriptStream {{
         background-color: {palette.canvas}; color: {palette.text}; border: none;
     }}
@@ -94,7 +97,9 @@ def qss(palette: StudioPalette) -> str:
         background-color: {palette.accent}; color: {palette.text};
         border: none; border-radius: 14px;
     }}
-    QLabel#chatBanner, QLabel#settingsError {{ color: {palette.danger}; }}
+    QLabel#chatBanner, QLabel#settingsError, QLabel#modelsError, QLabel#modelsBanner {{
+        color: {palette.danger};
+    }}
     QPushButton#regenerateButton, QPushButton#inspectorToggle {{
         background: transparent; color: {palette.accent}; border: none;
     }}

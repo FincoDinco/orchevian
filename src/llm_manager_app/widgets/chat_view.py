@@ -1,4 +1,4 @@
-"""Column 3 chat: transcript, composer, inspector, stop, regenerate."""
+"""Column 3 chat: transcript, composer, inspector, picker, stop, regenerate."""
 
 from __future__ import annotations
 
@@ -13,9 +13,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from llm_engine.domain.models import ChatTurn, Conversation, GenerationParams
+from llm_engine.domain.models import ChatTurn, Conversation, GenerationParams, LocalModel, ModelRef
 from llm_manager_app.widgets.composer import Composer
 from llm_manager_app.widgets.inspector import Inspector
+from llm_manager_app.widgets.model_picker import ModelPicker
 from llm_manager_app.widgets.transcript import Transcript
 
 
@@ -28,11 +29,15 @@ class ChatView(QWidget):
     unload_requested = Signal()
     restart_requested = Signal()
     inspector_open_changed = Signal(bool)
+    model_selected = Signal(object)
+    manage_models_requested = Signal()
+    catalog_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("detailPane")
         self._cid: int | None = None
+        self._model: ModelRef | None = None
         self._generating_id: int | None = None
         self._buffer = ""
         self._pending: tuple[str, int, str] | None = None
@@ -40,6 +45,8 @@ class ChatView(QWidget):
         self._undo_assistant: ChatTurn | None = None
         self._rejected_drafts: dict[int, str] = {}
         self._rejected_banners: dict[int, str] = {}
+        self._catalog_error: str | None = None
+        self._catalog_ready = False
 
         self._empty = QLabel("Select a conversation.", self)
         self._empty.setObjectName("chatEmpty")
@@ -50,6 +57,12 @@ class ChatView(QWidget):
         self._banner.setObjectName("chatBanner")
         self._banner.setWordWrap(True)
         self._banner.hide()
+
+        self._picker = ModelPicker(self)
+        self._picker.setEnabled(False)
+        self._picker.model_selected.connect(self._on_pick)
+        self._picker.manage_models_requested.connect(self.manage_models_requested)
+        self._picker.catalog_requested.connect(self.catalog_requested)
 
         self._inspector_btn = QPushButton("Inspector", self)
         self._inspector_btn.setObjectName("inspectorToggle")
@@ -66,14 +79,40 @@ class ChatView(QWidget):
 
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(0, 0, 0, 0)
-        toolbar.addWidget(self._inspector_btn)
+        toolbar.addWidget(self._picker, 0)
         toolbar.addStretch(1)
+        toolbar.addWidget(self._inspector_btn)
         toolbar.addWidget(self._regen)
 
         self._transcript = Transcript(self)
+        self._model_empty = QLabel(self)
+        self._model_empty.setObjectName("modelEmpty")
+        self._model_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._model_empty.setWordWrap(True)
+
+        self._open_models = QPushButton("Open Models", self)
+        self._open_models.setObjectName("openModelsButton")
+        self._open_models.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._open_models.clicked.connect(self.manage_models_requested)
+
+        empty_pane = QWidget(self)
+        empty_pane.setObjectName("modelEmptyPane")
+        empty_layout = QVBoxLayout(empty_pane)
+        empty_layout.setContentsMargins(16, 16, 16, 16)
+        empty_layout.addStretch(1)
+        empty_layout.addWidget(self._model_empty)
+        empty_layout.addWidget(self._open_models, 0, Qt.AlignmentFlag.AlignHCenter)
+        empty_layout.addStretch(1)
+
+        self._content = QStackedWidget(self)
+        self._content.addWidget(self._transcript)
+        self._content.addWidget(empty_pane)
+        self._empty_pane = empty_pane
+
         self._composer = Composer(self)
         self._composer.send_requested.connect(self._on_send)
         self._composer.setEnabled(False)
+        self._composer.set_send_enabled(False)
 
         body = QWidget(self)
         body_layout = QVBoxLayout(body)
@@ -81,7 +120,7 @@ class ChatView(QWidget):
         body_layout.setSpacing(8)
         body_layout.addWidget(self._banner)
         body_layout.addLayout(toolbar)
-        body_layout.addWidget(self._transcript, 1)
+        body_layout.addWidget(self._content, 1)
         body_layout.addWidget(self._composer, 0)
 
         self._inspector = Inspector(self)
@@ -128,6 +167,9 @@ class ChatView(QWidget):
     def inspector(self) -> Inspector:
         return self._inspector
 
+    def picker(self) -> ModelPicker:
+        return self._picker
+
     def inspector_open(self) -> bool:
         return self._inspector.isVisible()
 
@@ -158,9 +200,25 @@ class ChatView(QWidget):
         self._banner.setText(text)
         self._banner.show()
 
+    def set_catalog(self, models: object, availability: object) -> None:
+        model_list: list[LocalModel] = []
+        if isinstance(models, list):
+            model_list = [item for item in models if isinstance(item, LocalModel)]
+        avail = dict(availability) if isinstance(availability, dict) else {}
+        self._catalog_error = None
+        self._catalog_ready = True
+        self._picker.set_catalog(model_list, avail)
+        self._sync_enabled()
+
+    def on_catalog_failed(self, code: str, message: str) -> None:
+        self._catalog_error = message or code
+        self._catalog_ready = True
+        self._sync_enabled()
+
     def set_conversation(self, conversation: Conversation | None) -> None:
         if conversation is None:
             self._cid = None
+            self._model = None
             self._pending = None
             self._error_plain_id = None
             self._undo_assistant = None
@@ -168,10 +226,20 @@ class ChatView(QWidget):
             self._banner.hide()
             self._composer.clear()
             self._composer.setEnabled(False)
+            self._composer.set_send_enabled(False)
             self._regen.setEnabled(False)
+            self._picker.set_current(None)
+            self._picker.setEnabled(False)
             self._inspector.set_conversation(None)
+            self._content.setCurrentWidget(self._transcript)
             self._stack.setCurrentWidget(self._empty)
             return
+        outgoing = self._cid
+        if outgoing is not None and outgoing != conversation.summary.id:
+            self._inspector.flush_prompt()
+        self._model = conversation.summary.model
+        self._picker.set_current(self._model)
+        self.catalog_requested.emit()
         cid = conversation.summary.id
         if self.is_streaming(cid):
             self._cid = cid
@@ -184,6 +252,7 @@ class ChatView(QWidget):
             return
         if self.keeping_error_buffer(cid) and self._cid == cid:
             self._stack.setCurrentWidget(self._chat_split)
+            self._sync_enabled()
             return
         self._cid = cid
         self._error_plain_id = None
@@ -216,7 +285,9 @@ class ChatView(QWidget):
 
     def regenerate(self) -> None:
         cid = self._cid
-        if cid is None or self._generating_id is not None or self._pending is not None:
+        if cid is None or self._model is None:
+            return
+        if self._generating_id is not None or self._pending is not None:
             return
         if not self._transcript.turns():
             return
@@ -234,7 +305,6 @@ class ChatView(QWidget):
 
     def on_accepted(self, conversation_id: int, kind: str) -> None:
         del kind
-        # generating_id / stream already started on send; done may beat accepted.
         if self._pending is not None and self._pending[1] == conversation_id:
             self._pending = None
         self._undo_assistant = None
@@ -336,9 +406,19 @@ class ChatView(QWidget):
         if code != "generating":
             self.show_banner(message or code)
 
+    def _on_pick(self, ref: object) -> None:
+        if not isinstance(ref, ModelRef):
+            return
+        self._model = ref
+        self._picker.set_current(ref)
+        self._sync_enabled()
+        self.model_selected.emit(ref)
+
     def _on_send(self, text: str) -> None:
         cid = self._cid
-        if cid is None or self._generating_id is not None or self._pending is not None:
+        if cid is None or self._model is None:
+            return
+        if self._generating_id is not None or self._pending is not None:
             return
         if not text.strip():
             return
@@ -376,8 +456,34 @@ class ChatView(QWidget):
 
     def _sync_enabled(self) -> None:
         has = self._cid is not None
+        has_model = has and self._model is not None
         busy = self._generating_id is not None or self._pending is not None
+        self._picker.setEnabled(has and self._catalog_ready)
         self._composer.setEnabled(has and not busy)
-        self._regen.setEnabled(has and bool(self._transcript.turns()) and not busy)
-        # System prompt stays editable during generate (next turn).
+        self._composer.set_send_enabled(has_model and not busy)
+        self._regen.setEnabled(has_model and bool(self._transcript.turns()) and not busy)
         self._inspector.setEnabled(has)
+        self._sync_empty()
+
+    def _sync_empty(self) -> None:
+        if self._cid is None:
+            return
+        if (
+            self._model is not None
+            or self._transcript.turns()
+            or self.is_streaming()
+            or self.keeping_error_buffer(self._cid)
+        ):
+            self._content.setCurrentWidget(self._transcript)
+            return
+        reason = self._catalog_error or self._picker.unavailable_copy()
+        if self._catalog_ready and not self._picker.has_models():
+            text = "No models available."
+            if reason:
+                text = f"{text}\n{reason}"
+            self._open_models.show()
+        else:
+            text = "Select a model to start chatting."
+            self._open_models.hide()
+        self._model_empty.setText(text)
+        self._content.setCurrentWidget(self._empty_pane)
