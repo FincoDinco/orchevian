@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,23 @@ def _wait_until(predicate, timeout: float = 5.0, message: str = "timeout") -> No
             return
         time.sleep(0.01)
     raise AssertionError(message)
+
+
+def _conv(cid: int = 1, model: ModelRef | None = None) -> Conversation:
+    now = datetime.now()
+    return Conversation(
+        summary=ConversationSummary(
+            id=cid,
+            title="New Chat",
+            model=model,
+            project_id=None,
+            message_count=0,
+            updated_at=now,
+            created_at=now,
+        ),
+        system_prompt="",
+        messages=(),
+    )
 
 
 def _window(tmp_path: Path, fake: FakeBackend | list[FakeBackend] | None = None):
@@ -260,6 +278,7 @@ def test_catalog_failure_empty_state(tmp_path: Path) -> None:
         assert send is not None and not send.isEnabled()
         open_btn = window.findChild(QPushButton, "openModelsButton")
         assert open_btn is not None and open_btn.isVisible()
+        assert window._chat_view.picker().isEnabled()
     finally:
         window.close()
         store.close()
@@ -271,32 +290,15 @@ def test_catalog_error_clears_after_successful_list() -> None:
     except Exception as exc:
         pytest.skip(f"no display: {exc}")
 
-    from datetime import datetime
-
     from PySide6.QtWidgets import QLabel
 
     from llm_manager_app.widgets.chat_view import ChatView
 
-    now = datetime.now()
     view = ChatView()
     try:
         view.show()
         app.processEvents()
-        view.set_conversation(
-            Conversation(
-                summary=ConversationSummary(
-                    id=1,
-                    title="New Chat",
-                    model=None,
-                    project_id=None,
-                    message_count=0,
-                    updated_at=now,
-                    created_at=now,
-                ),
-                system_prompt="",
-                messages=(),
-            )
-        )
+        view.set_conversation(_conv())
         view.on_catalog_failed("backend_unavailable", "catalog exploded")
         empty = view.findChild(QLabel, "modelEmpty")
         assert empty is not None
@@ -304,5 +306,72 @@ def test_catalog_error_clears_after_successful_list() -> None:
         view.set_catalog([LOCAL], {"ollama": (True, None)})
         assert "catalog exploded" not in empty.text()
         assert "Select a model" in empty.text()
+    finally:
+        view.close()
+
+
+def test_failed_refresh_keeps_loaded_catalog() -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QLabel, QPushButton
+
+    from llm_manager_app.widgets.chat_view import ChatView
+
+    view = ChatView()
+    try:
+        view.show()
+        app.processEvents()
+        view.set_conversation(_conv())
+        view.set_catalog([LOCAL], {"ollama": (True, None)})
+        picker = view.picker()
+        empty = view.findChild(QLabel, "modelEmpty")
+        assert picker.has_models()
+        assert empty is not None
+        assert "Select a model" in empty.text()
+        view.on_catalog_failed("backend_unavailable", "catalog exploded")
+        assert picker.has_models()
+        assert "catalog exploded" not in empty.text()
+        assert "No models available." not in empty.text()
+        assert "Select a model" in empty.text()
+
+        view.set_conversation(_conv(model=REF))
+        send = view.findChild(QPushButton, "sendButton")
+        assert send is not None and send.isEnabled()
+        view.on_catalog_failed("backend_unavailable", "catalog exploded")
+        assert picker.has_models()
+        assert send.isEnabled()
+    finally:
+        view.close()
+
+
+def test_picker_disabled_until_catalog_ready() -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QPushButton
+
+    from llm_manager_app.widgets.chat_view import ChatView
+
+    view = ChatView()
+    try:
+        view.show()
+        app.processEvents()
+        view.set_conversation(_conv())
+        picker = view.picker()
+        send = view.findChild(QPushButton, "sendButton")
+        assert not picker.isEnabled()
+        assert send is not None and not send.isEnabled()
+        menu = picker.menu()
+        assert menu is not None
+        assert "fake" not in [action.text() for action in menu.actions()]
+        view.set_catalog([LOCAL], {"ollama": (True, None)})
+        assert picker.isEnabled()
+        assert picker.has_models()
+        assert "fake" in [action.text() for action in menu.actions()]
     finally:
         view.close()

@@ -167,16 +167,25 @@ class MainWindow(QMainWindow):
             thread.wait(2000)
             self._worker_thread = None
         catalog_thread = self._catalog_thread
+        catalog_done = True
         if catalog_thread is not None:
+            try:
+                self._chat_view.catalog_requested.disconnect(self._catalog.list_models)
+            except RuntimeError:
+                pass
             try:
                 self._catalog.listed.disconnect()
                 self._catalog.failed.disconnect()
             except RuntimeError:
                 pass
             catalog_thread.quit()
-            catalog_thread.wait(2000)
+            # Ollama is_available/list_models can block for the 5s client timeout.
+            catalog_done = catalog_thread.wait(6000)
+            if not catalog_done:
+                # A running QThread must not be destroyed with the window.
+                catalog_thread.setParent(None)
             self._catalog_thread = None
-        if self._owns_registry:
+        if self._owns_registry and catalog_done:
             self._registry.close()
         store = self._store
         closer = getattr(store, "close", None)

@@ -148,12 +148,12 @@ class ChatView(QWidget):
         self._catalog_error = None
         self._catalog_ready = True
         self._picker.set_catalog(model_list, avail)
-        self._sync_empty()
+        self._sync_enabled()
 
     def on_catalog_failed(self, code: str, message: str) -> None:
         self._catalog_error = message or code
         self._catalog_ready = True
-        self._sync_empty()
+        self._sync_enabled()
 
     def set_conversation(self, conversation: Conversation | None) -> None:
         if conversation is None:
@@ -175,7 +175,6 @@ class ChatView(QWidget):
             return
         self._model = conversation.summary.model
         self._picker.set_current(self._model)
-        self._picker.setEnabled(True)
         self.catalog_requested.emit()
         cid = conversation.summary.id
         if self.is_streaming(cid):
@@ -346,7 +345,7 @@ class ChatView(QWidget):
         has = self._cid is not None
         has_model = has and self._model is not None
         busy = self._generating_id is not None or self._pending is not None
-        self._picker.setEnabled(has)
+        self._picker.setEnabled(has and self._catalog_ready)
         self._composer.setEnabled(has and not busy)
         self._composer.set_send_enabled(has_model and not busy)
         self._regen.setEnabled(has_model and bool(self._transcript.turns()) and not busy)
