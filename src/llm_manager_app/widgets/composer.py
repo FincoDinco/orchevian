@@ -50,6 +50,7 @@ class Composer(QWidget):
         self._send.setDefault(False)
         self._send.setAutoDefault(False)
         self._send.clicked.connect(self.submit)
+        self._send_allowed = True
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -75,17 +76,21 @@ class Composer(QWidget):
         self._edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def submit(self) -> None:
-        if not self.isEnabled():
+        if not self.isEnabled() or not self._send.isEnabled():
             return
         text = self._edit.toPlainText()
         if not text.strip():
             return
         self.send_requested.emit(text)
 
+    def set_send_enabled(self, enabled: bool) -> None:
+        self._send_allowed = enabled
+        self._send.setEnabled(self.isEnabled() and enabled)
+
     def setEnabled(self, enabled: bool) -> None:
         super().setEnabled(enabled)
         self._edit.setEnabled(enabled)
-        self._send.setEnabled(enabled)
+        self._send.setEnabled(enabled and self._send_allowed)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)

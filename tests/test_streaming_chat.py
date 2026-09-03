@@ -402,11 +402,13 @@ def test_regenerate_replaces_assistant(tmp_path: Path) -> None:
         store.close()
 
 
-def test_send_without_model_shows_banner(tmp_path: Path) -> None:
+def test_send_disabled_without_a_model(tmp_path: Path) -> None:
     try:
         app = _qapp()
     except Exception as exc:
         pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QLabel, QPushButton, QToolButton
 
     window, store, library, _probe = _window(tmp_path)
     try:
@@ -414,29 +416,31 @@ def test_send_without_model_shows_banner(tmp_path: Path) -> None:
         window._list.refresh(select_id=cid)
         window.show()
         app.processEvents()
-        assert window._worker is not None
-        window._chat_view.composer().set_text("hello")
-        window._chat_view.composer().submit()
+        send = window.findChild(QPushButton, "sendButton")
+        picker = window.findChild(QToolButton, "modelPicker")
+        assert send is not None and not send.isEnabled()
+        assert picker is not None and picker.text() == "Select a model"
+        composer = window._chat_view.composer()
+        composer.set_text("hello")
+        composer.submit()
+        assert not window._chat_view.is_streaming()
+        assert composer.text() == "hello"
         _wait_until(
-            lambda: bool(window._chat_view.banner_text()),
-            message="timed out waiting for rejected banner",
+            lambda: "Select a model" in (window.findChild(QLabel, "modelEmpty").text() or ""),
+            message="timed out waiting for no-model empty state",
         )
-        app.processEvents()
-        banner = window._chat_view.banner_text()
-        assert "no_model" in banner or "model" in banner
-        assert window._chat_view.composer().text() == "hello"
     finally:
         window.close()
         store.close()
 
 
-def _conv(cid: int, title: str = "New Chat") -> Conversation:
+def _conv(cid: int, title: str = "New Chat", model: ModelRef | None = None) -> Conversation:
     now = datetime.now()
     return Conversation(
         summary=ConversationSummary(
             id=cid,
             title=title,
-            model=None,
+            model=model,
             project_id=None,
             message_count=0,
             updated_at=now,
@@ -458,14 +462,14 @@ def test_rejected_does_not_restore_composer_on_other_conversation() -> None:
     view = ChatView()
     view.show()
     app.processEvents()
-    view.set_conversation(_conv(1, "Alpha"))
+    view.set_conversation(_conv(1, "Alpha", REF))
     view.composer().set_text("secret-draft")
     view.composer().submit()
-    view.set_conversation(_conv(2, "Beta"))
+    view.set_conversation(_conv(2, "Beta", REF))
     view.on_rejected(1, "no_model", "conversation has no model")
     assert "secret-draft" not in view.composer().text()
     assert view.banner_text() == ""
-    view.set_conversation(_conv(1, "Alpha"))
+    view.set_conversation(_conv(1, "Alpha", REF))
     app.processEvents()
     assert view.composer().text() == "secret-draft"
     assert "model" in view.banner_text()

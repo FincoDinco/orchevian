@@ -7,6 +7,7 @@ from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QSplitter, QWidget
 
 from llm_engine.backends.registry import BackendRegistry
+from llm_engine.domain.models import ModelRef
 from llm_engine.services.chat import ChatService
 from llm_engine.services.session import ModelSession
 from llm_engine.store.library import LibraryService
@@ -14,7 +15,12 @@ from llm_manager_app.tokens import apply_studio
 from llm_manager_app.widgets.chat_view import ChatView
 from llm_manager_app.widgets.conversation_list import ConversationList, ConversationStore
 from llm_manager_app.widgets.sidebar import CHATS, MODELS, Sidebar
-from llm_manager_app.workers import ChatWorker, start_chat_worker
+from llm_manager_app.workers import (
+    CatalogWorker,
+    ChatWorker,
+    start_catalog_worker,
+    start_chat_worker,
+)
 
 _TITLE = "LLM Manager"
 
@@ -57,6 +63,8 @@ class MainWindow(QMainWindow):
         self._chat_service: ChatService | None = None
         self._worker: ChatWorker | None = None
         self._worker_thread: QThread | None = None
+        self._catalog: CatalogWorker
+        self._catalog_thread, self._catalog = start_catalog_worker(self._registry, self)
         if isinstance(library, LibraryService):
             self._chat_service = ChatService(library, self._session)
             self._worker_thread, self._worker = start_chat_worker(
@@ -79,6 +87,15 @@ class MainWindow(QMainWindow):
         self._chat_view = ChatView(splitter)
         self._chat_view.stop_requested.connect(self._on_stop)
         self._chat_view.turn_finished.connect(self._on_turn_finished)
+        self._chat_view.model_selected.connect(self._on_model_selected)
+        self._chat_view.manage_models_requested.connect(
+            lambda: self._sidebar.select_section(MODELS)
+        )
+        self._chat_view.catalog_requested.connect(
+            self._catalog.list_models, Qt.ConnectionType.QueuedConnection
+        )
+        self._catalog.listed.connect(self._chat_view.set_catalog)
+        self._catalog.failed.connect(self._chat_view.on_catalog_failed)
         if self._worker is not None:
             # Queued: worker lives on a QThread after start_chat_worker.
             self._chat_view.send_requested.connect(self._worker.send)
@@ -149,6 +166,16 @@ class MainWindow(QMainWindow):
             thread.quit()
             thread.wait(2000)
             self._worker_thread = None
+        catalog_thread = self._catalog_thread
+        if catalog_thread is not None:
+            try:
+                self._catalog.listed.disconnect()
+                self._catalog.failed.disconnect()
+            except RuntimeError:
+                pass
+            catalog_thread.quit()
+            catalog_thread.wait(2000)
+            self._catalog_thread = None
         if self._owns_registry:
             self._registry.close()
         store = self._store
@@ -186,6 +213,17 @@ class MainWindow(QMainWindow):
         # Set the cancel Event on the GUI thread; do not wait.
         if self._chat_service is not None:
             self._chat_service.stop(conversation_id)
+
+    def _on_model_selected(self, ref: object) -> None:
+        if not isinstance(ref, ModelRef):
+            return
+        cid = self._chat_view.conversation_id()
+        if cid is None or self._chat_service is None:
+            return
+        self._chat_service.set_model(cid, ref)
+        getter = getattr(self._library, "get_conversation", None)
+        if callable(getter):
+            self._chat_view.set_conversation(getter(cid))
 
     def _on_chat_accepted(self, cid: int, _kind: str) -> None:
         self._list.refresh(select_id=cid)

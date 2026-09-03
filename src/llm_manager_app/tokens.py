@@ -99,16 +99,17 @@ def qss(palette: StudioPalette) -> str:
         border-radius: {palette.radius_control}px;
         padding: 6px 8px;
     }}
-    QPushButton#newChatButton {{
+    QPushButton#newChatButton, QPushButton#openModelsButton {{
         background-color: transparent;
         color: {palette.accent};
         border: none;
         padding: 6px 8px;
     }}
-    QLabel#listEmpty, QLabel#chatEmpty {{
+    QLabel#listEmpty, QLabel#chatEmpty, QLabel#modelEmpty {{
         color: {palette.secondary};
         background: transparent;
     }}
+    QToolButton#modelPicker {{ background: transparent; color: {palette.text}; border: none; }}
     QWidget#detailPane, QLabel#detailPane, QWidget#transcript {{
         background-color: {palette.canvas};
         color: {palette.text};
