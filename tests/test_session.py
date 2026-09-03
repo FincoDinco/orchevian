@@ -173,7 +173,7 @@ def test_force_unload_drops_handle_while_generating() -> None:
     gen = session.generate([ChatTurn("user", "hi")], GenerationParams(), threading.Event())
     assert next(gen) == "one"
     assert session.status().generating is True
-    session.force_unload()
+    assert session.force_unload() is True
     assert session.status().loaded is None
     assert len(fake.unload_calls) == 1
     with pytest.raises(EngineError) as exc:
@@ -183,6 +183,42 @@ def test_force_unload_drops_handle_while_generating() -> None:
     assert list(gen) == ["two"]
     assert session.status().generating is False
     assert session.status().loaded is None
+
+
+def test_force_unload_aborts_in_flight_load() -> None:
+    model = _model(BackendName.OLLAMA, "fake")
+    gate = threading.Event()
+    fake = FakeBackend(models=[model], block_load=gate)
+    session = ModelSession(BackendRegistry([fake]))
+    errors: list[BaseException] = []
+    done = threading.Event()
+
+    def worker() -> None:
+        try:
+            session.load(model.ref)
+        except BaseException as exc:
+            errors.append(exc)
+        done.set()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    for _ in range(100):
+        if fake.load_calls:
+            break
+        done.wait(timeout=0.02)
+    assert fake.load_calls
+    assert session.status().generating is True
+    assert session.force_unload() is False
+    assert session.status().loaded is None
+    gate.set()
+    assert done.wait(timeout=2)
+    thread.join(timeout=2)
+    assert len(errors) == 1
+    assert isinstance(errors[0], EngineError)
+    assert errors[0].code == "cancelled"
+    assert session.status().loaded is None
+    assert session.status().generating is False
+    assert len(fake.unload_calls) == 1
 
 
 def test_unload_clears_loaded_handle() -> None:

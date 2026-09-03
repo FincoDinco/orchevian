@@ -62,14 +62,18 @@ class ChatWorker(QObject):
             self.unload_failed.emit("not_found", "no session")
             return
         try:
-            session.force_unload()
+            dropped_or_idle = session.force_unload()
         except EngineError as exc:
             self.unload_failed.emit(exc.code, str(exc))
             return
         except Exception as exc:
             self.unload_failed.emit("backend_unavailable", str(exc))
             return
-        self.unloaded.emit()
+        if dropped_or_idle:
+            self.unloaded.emit()
+            return
+        # Load still holds the lock with no handle yet; GUI must stay busy.
+        self.unload_failed.emit("generating", "load still in progress")
 
     def _on_token(self, conversation_id: int, text: str) -> None:
         QMetaObject.invokeMethod(

@@ -42,6 +42,9 @@ class ModelSession:
     def __init__(self, registry: BackendRegistry) -> None:
         self._registry = registry
         self._lock = threading.Lock()
+        # Guards handle/epoch. Never held during backend.load / stream_generate.
+        self._meta = threading.Lock()
+        self._epoch = 0
         self._generating = False
         self._handle: LoadedHandle | None = None
         self._backend: InferenceBackend | None = None
@@ -63,29 +66,49 @@ class ModelSession:
         on_progress: Callable[..., object] | None = None,
     ) -> LocalModel:
         opts = options if options is not None else LoadOptions()
+        with self._meta:
+            epoch = self._epoch
         if not self._lock.acquire(blocking=False):
             raise EngineError("generating", "generation already in progress")
         self._generating = True
         try:
-            if (
-                self._handle is not None
-                and self._handle.model.ref == ref
-                and _handle_options(self._handle).n_ctx == opts.n_ctx
-            ):
+            with self._meta:
+                if self._epoch != epoch:
+                    raise EngineError("cancelled", "load aborted")
+                cached = (
+                    self._handle.model
+                    if self._handle is not None
+                    and self._handle.model.ref == ref
+                    and _handle_options(self._handle).n_ctx == opts.n_ctx
+                    else None
+                )
+            if cached is not None:
                 if on_progress is not None:
                     on_progress(1.0)
-                return self._handle.model
+                return cached
             backend = self._registry.get(str(ref.backend))
             model = self._resolve(backend, ref)
-            self._unload_locked()
+            self._drop_handle()
             if on_progress is not None:
                 on_progress(0.0)
-            self._handle = backend.load(model, opts)
-            self._backend = backend
+            handle = backend.load(model, opts)
+            with self._meta:
+                if self._epoch != epoch:
+                    self._handle = None
+                    self._backend = None
+                    abort = True
+                else:
+                    self._handle = handle
+                    self._backend = backend
+                    abort = False
+            if abort:
+                backend.unload(handle)
+                _log.info("unloaded %s", handle.model.ref.id)
+                raise EngineError("cancelled", "load aborted")
             if on_progress is not None:
                 on_progress(1.0)
             _log.info("loaded %s n_ctx=%s", ref.id, opts.n_ctx)
-            return self._handle.model
+            return handle.model
         finally:
             self._generating = False
             self._lock.release()
@@ -95,21 +118,26 @@ class ModelSession:
             raise EngineError("generating", "generation already in progress")
         self._generating = True
         try:
-            self._unload_locked()
+            self._drop_handle()
         finally:
             self._generating = False
             self._lock.release()
 
-    def force_unload(self) -> None:
-        # generate() holds `_lock` for the whole stream; waiting would hang the GUI worker.
-        handle = self._handle
-        backend = self._backend
-        self._handle = None
-        self._backend = None
-        if handle is None or backend is None:
-            return
-        backend.unload(handle)
-        _log.info("unloaded %s", handle.model.ref.id)
+    def force_unload(self) -> bool:
+        # generate/load hold `_lock` for backend I/O; waiting would hang the GUI worker.
+        with self._meta:
+            in_flight = self._generating or self._lock.locked()
+            if in_flight:
+                self._epoch += 1
+            handle = self._handle
+            backend = self._backend
+            self._handle = None
+            self._backend = None
+        if handle is not None and backend is not None:
+            backend.unload(handle)
+            _log.info("unloaded %s", handle.model.ref.id)
+            return True
+        return not in_flight
 
     def generate(
         self,
@@ -120,12 +148,14 @@ class ModelSession:
         if not self._lock.acquire(blocking=False):
             raise EngineError("generating", "generation already in progress")
         try:
-            if self._handle is None or self._backend is None:
-                raise EngineError("no_model", "no model loaded")
-            self._generating = True
-            handle = self._handle
-            backend = self._backend
+            with self._meta:
+                if self._handle is None or self._backend is None:
+                    raise EngineError("no_model", "no model loaded")
+                self._generating = True
+                handle = self._handle
+                backend = self._backend
         except BaseException:
+            self._generating = False
             self._lock.release()
             raise
 
@@ -144,11 +174,12 @@ class ModelSession:
                 return model
         raise EngineError("not_found", f"model not found: {ref.id}")
 
-    def _unload_locked(self) -> None:
-        handle = self._handle
-        backend = self._backend
-        self._handle = None
-        self._backend = None
+    def _drop_handle(self) -> None:
+        with self._meta:
+            handle = self._handle
+            backend = self._backend
+            self._handle = None
+            self._backend = None
         if handle is None or backend is None:
             return
         backend.unload(handle)

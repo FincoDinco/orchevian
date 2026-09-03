@@ -578,6 +578,56 @@ def test_force_unload_when_generate_ignores_cancel(tmp_path: Path) -> None:
         store.close()
 
 
+def test_unload_during_load_keeps_gui_busy(tmp_path: Path) -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QPushButton
+
+    gate = threading.Event()
+    fake = ProbeFake(models=[LOCAL], chunks=("Hello", " world"), block_load=gate)
+    window, store, library, probe = _window(tmp_path, fake=fake)
+    try:
+        cid = library.create_conversation(model=REF).summary.id
+        window._list.refresh(select_id=cid)
+        window.show()
+        app.processEvents()
+        window._chat_view.inspector().set_unload_offer_ms(10)
+        window._chat_view.composer().set_text("load me")
+        window._chat_view.composer().submit()
+        _wait_until(lambda: bool(probe.load_calls), message="load never started")
+        unload = window.findChild(QPushButton, "unloadButton")
+        _wait_until(lambda: unload is not None and unload.isVisible(), message="no unload offer")
+        assert unload is not None
+        unload.click()
+        settled = time.monotonic() + 0.3
+        while time.monotonic() < settled:
+            app.processEvents()
+            time.sleep(0.01)
+        assert window._chat_view.is_streaming()
+        assert not window._chat_view.composer().isEnabled()
+        assert window._chat_service is not None
+        with window._chat_service._state_lock:
+            assert window._chat_service._generating is True
+        assert window._session.status().loaded is None
+        gate.set()
+        _wait_until(
+            lambda: not window._chat_view.is_streaming(),
+            message="aborted load never finished",
+        )
+        assert window._session.status().loaded is None
+        with window._chat_service._state_lock:
+            assert window._chat_service._generating is False
+        assert window._chat_view.banner_text()
+        assert window._chat_view.composer().isEnabled()
+    finally:
+        gate.set()
+        window.close()
+        store.close()
+
+
 def test_system_prompt_flush_on_send_before_debounce(tmp_path: Path) -> None:
     try:
         app = _qapp()
