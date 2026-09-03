@@ -101,6 +101,8 @@ def _library(tmp_path: Path):
 
 
 def _window(tmp_path: Path, registry: BackendRegistry | None = None, library=None):
+    from PySide6.QtCore import QSettings
+
     from llm_manager_app.main_window import MainWindow
 
     store = None
@@ -108,7 +110,8 @@ def _window(tmp_path: Path, registry: BackendRegistry | None = None, library=Non
         store, library = _library(tmp_path)
     if registry is None:
         registry = BackendRegistry([FakeBackend()])
-    window = MainWindow(registry=registry, library=library)
+    settings = QSettings(str(tmp_path / "gui.ini"), QSettings.Format.IniFormat)
+    window = MainWindow(registry=registry, library=library, settings=settings)
     return window, store, library
 
 

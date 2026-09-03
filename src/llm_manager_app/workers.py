@@ -7,8 +7,13 @@ from PySide6.QtCore import Q_ARG, QMetaObject, QObject, Qt, QThread, Signal, Slo
 from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import GenerationParams
 from llm_engine.services.chat import ChatService
+from llm_engine.services.session import ModelSession
 
 _BALANCED = GenerationParams.preset("balanced")
+
+
+def _params(value: object) -> GenerationParams:
+    return value if isinstance(value, GenerationParams) else _BALANCED
 
 
 class ChatWorker(QObject):
@@ -20,32 +25,51 @@ class ChatWorker(QObject):
     load_progress = Signal(int)
     accepted = Signal(int, str)
     rejected = Signal(int, str, str)
+    unloaded = Signal()
+    unload_failed = Signal(str, str)
 
-    def __init__(self, chat: ChatService) -> None:
+    def __init__(self, chat: ChatService, session: ModelSession | None = None) -> None:
         super().__init__()
         self._chat = chat
+        self._session = session
         chat.on_token = self._on_token
         chat.on_done = self._on_done
         chat.on_error = self._on_error
         chat.on_load_progress = self._on_load_progress
 
-    @Slot(int, str)
-    def send(self, conversation_id: int, content: str) -> None:
+    @Slot(int, str, object)
+    def send(self, conversation_id: int, content: str, params: object = None) -> None:
         try:
-            self._chat.send(conversation_id, content, _BALANCED)
+            self._chat.send(conversation_id, content, _params(params))
         except EngineError as exc:
             self.rejected.emit(conversation_id, exc.code, str(exc))
             return
         self.accepted.emit(conversation_id, "send")
 
-    @Slot(int)
-    def regenerate(self, conversation_id: int) -> None:
+    @Slot(int, object)
+    def regenerate(self, conversation_id: int, params: object = None) -> None:
         try:
-            self._chat.regenerate(conversation_id, _BALANCED)
+            self._chat.regenerate(conversation_id, _params(params))
         except EngineError as exc:
             self.rejected.emit(conversation_id, exc.code, str(exc))
             return
         self.accepted.emit(conversation_id, "regenerate")
+
+    @Slot()
+    def unload(self) -> None:
+        session = self._session
+        if session is None:
+            self.unload_failed.emit("not_found", "no session")
+            return
+        try:
+            session.unload()
+        except EngineError as exc:
+            self.unload_failed.emit(exc.code, str(exc))
+            return
+        except Exception as exc:
+            self.unload_failed.emit("backend_unavailable", str(exc))
+            return
+        self.unloaded.emit()
 
     def _on_token(self, conversation_id: int, text: str) -> None:
         QMetaObject.invokeMethod(
@@ -120,10 +144,13 @@ class ChatWorker(QObject):
 
 
 def start_chat_worker(
-    chat: ChatService, parent: QObject | None = None
+    chat: ChatService,
+    parent: QObject | None = None,
+    *,
+    session: ModelSession | None = None,
 ) -> tuple[QThread, ChatWorker]:
     thread = QThread(parent)
-    worker = ChatWorker(chat)
+    worker = ChatWorker(chat, session=session)
     worker.moveToThread(thread)
     thread.start()
     return thread, worker

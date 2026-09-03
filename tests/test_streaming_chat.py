@@ -92,12 +92,15 @@ class ProbeFake(FakeBackend):
 
 
 def _window(tmp_path: Path, fake: FakeBackend | None = None):
+    from PySide6.QtCore import QSettings
+
     from llm_manager_app.main_window import MainWindow
 
     store, library = _library(tmp_path)
     probe = fake if fake is not None else ProbeFake(models=[LOCAL], chunks=("Hello", " world"))
     registry = BackendRegistry([probe])
-    window = MainWindow(registry=registry, library=library)
+    settings = QSettings(str(tmp_path / "gui.ini"), QSettings.Format.IniFormat)
+    window = MainWindow(registry=registry, library=library, settings=settings)
     return window, store, library, probe
 
 

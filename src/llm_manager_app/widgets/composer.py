@@ -14,13 +14,30 @@ _SEND_PX = 28
 class ComposerEdit(QPlainTextEdit):
     send_requested = Signal()
 
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._return_sends = True
+
+    def set_return_sends(self, enabled: bool) -> None:
+        self._return_sends = enabled
+
+    def return_sends(self) -> bool:
+        return self._return_sends
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                super().keyPressEvent(event)
-            else:
-                event.accept()
-                self.send_requested.emit()
+        if event.key() not in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            super().keyPressEvent(event)
+            return
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            super().keyPressEvent(event)
+            return
+        ctrlish = bool(
+            event.modifiers()
+            & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
+        )
+        if self._return_sends or ctrlish:
+            event.accept()
+            self.send_requested.emit()
             return
         super().keyPressEvent(event)
 
@@ -73,6 +90,12 @@ class Composer(QWidget):
 
     def focus_edit(self) -> None:
         self._edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def set_return_sends(self, enabled: bool) -> None:
+        self._edit.set_return_sends(enabled)
+
+    def return_sends(self) -> bool:
+        return self._edit.return_sends()
 
     def submit(self) -> None:
         if not self.isEnabled():

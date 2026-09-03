@@ -2,17 +2,33 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
+from pathlib import Path
+
+from PySide6.QtCore import QSettings, Qt, QThread
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QSplitter, QWidget
 
 from llm_engine.backends.registry import BackendRegistry
+from llm_engine.config import default_log_path
 from llm_engine.services.chat import ChatService
 from llm_engine.services.session import ModelSession
 from llm_engine.store.library import LibraryService
 from llm_manager_app.tokens import apply_studio
 from llm_manager_app.widgets.chat_view import ChatView
 from llm_manager_app.widgets.conversation_list import ConversationList, ConversationStore
+from llm_manager_app.widgets.settings import (
+    APP_NAME,
+    KEY_APPEARANCE,
+    KEY_INSPECTOR_OPEN,
+    KEY_LAST_CONVERSATION_ID,
+    KEY_RETURN_SENDS,
+    ORG_NAME,
+    SettingsDialog,
+    ShortcutsDialog,
+    as_bool,
+    as_int,
+    make_settings,
+)
 from llm_manager_app.widgets.sidebar import CHATS, MODELS, Sidebar
 from llm_manager_app.workers import ChatWorker, start_chat_worker
 
@@ -34,6 +50,7 @@ class MainWindow(QMainWindow):
         *,
         registry: BackendRegistry | None = None,
         library: ConversationStore | None = None,
+        settings: QSettings | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -41,9 +58,15 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1024, 680)
         self.resize(1280, 800)
 
+        self._settings = settings if settings is not None else make_settings()
         qt_app = QApplication.instance()
         if isinstance(qt_app, QApplication):
-            apply_studio(qt_app)
+            if not qt_app.organizationName():
+                qt_app.setOrganizationName(ORG_NAME)
+            if not qt_app.applicationName():
+                qt_app.setApplicationName(APP_NAME)
+            theme = str(self._settings.value(KEY_APPEARANCE, "") or "").strip().lower()
+            apply_studio(qt_app, theme=theme if theme in {"light", "dark"} else None)
 
         self._owns_registry = registry is None
         self._registry = registry if registry is not None else BackendRegistry()
@@ -60,7 +83,7 @@ class MainWindow(QMainWindow):
         if isinstance(library, LibraryService):
             self._chat_service = ChatService(library, self._session)
             self._worker_thread, self._worker = start_chat_worker(
-                self._chat_service, self
+                self._chat_service, self, session=self._session
             )
 
         shell = QWidget(self)
@@ -79,16 +102,21 @@ class MainWindow(QMainWindow):
         self._chat_view = ChatView(splitter)
         self._chat_view.stop_requested.connect(self._on_stop)
         self._chat_view.turn_finished.connect(self._on_turn_finished)
+        self._chat_view.system_prompt_changed.connect(self._on_system_prompt)
+        self._chat_view.inspector_open_changed.connect(self._on_inspector_open)
         if self._worker is not None:
             # Queued: worker lives on a QThread after start_chat_worker.
             self._chat_view.send_requested.connect(self._worker.send)
             self._chat_view.regenerate_requested.connect(self._worker.regenerate)
+            self._chat_view.unload_requested.connect(self._worker.unload)
             self._worker.accepted.connect(self._chat_view.on_accepted)
             self._worker.accepted.connect(self._on_chat_accepted)
             self._worker.rejected.connect(self._chat_view.on_rejected)
             self._worker.token.connect(self._chat_view.on_token)
             self._worker.done.connect(self._chat_view.on_done)
             self._worker.error.connect(self._chat_view.on_error)
+            self._worker.unloaded.connect(self._chat_view.on_unloaded)
+            self._worker.unload_failed.connect(self._chat_view.on_unload_failed)
 
         splitter.addWidget(self._sidebar)
         splitter.addWidget(self._list)
@@ -104,6 +132,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(shell)
         self._splitter = splitter
 
+        self._settings_dialog: SettingsDialog | None = None
+        self._shortcuts_dialog: ShortcutsDialog | None = None
+        self._build_menus()
+
         self._shortcut_chats = QShortcut(QKeySequence("Ctrl+1"), self)
         self._shortcut_chats.activated.connect(lambda: self._sidebar.select_section(CHATS))
         self._shortcut_models = QShortcut(QKeySequence("Ctrl+2"), self)
@@ -117,9 +149,13 @@ class MainWindow(QMainWindow):
         self._shortcut_stop = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         self._shortcut_stop.activated.connect(self._chat_view.stop)
 
+        self._restore_chrome()
+        last = as_int(self._settings.value(KEY_LAST_CONVERSATION_ID))
+        self._list.refresh(select_id=last)
         self._on_selected(self._list.selected_id())
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._persist_chrome()
         service = self._chat_service
         if service is not None:
             with service._state_lock:
@@ -139,6 +175,8 @@ class MainWindow(QMainWindow):
                 self._worker.token,
                 self._worker.done,
                 self._worker.error,
+                self._worker.unloaded,
+                self._worker.unload_failed,
             ):
                 try:
                     sig.disconnect()
@@ -158,6 +196,76 @@ class MainWindow(QMainWindow):
             self._store = None
         super().closeEvent(event)
 
+    def _build_menus(self) -> None:
+        settings_act = QAction("Settings…", self)
+        settings_act.setObjectName("settingsAction")
+        settings_act.setShortcut(QKeySequence.StandardKey.Preferences)
+        settings_act.setMenuRole(QAction.MenuRole.PreferencesRole)
+        settings_act.triggered.connect(self._open_settings)
+        self._settings_action = settings_act
+
+        shortcuts_act = QAction("Keyboard Shortcuts", self)
+        shortcuts_act.setObjectName("shortcutsAction")
+        shortcuts_act.triggered.connect(self._open_shortcuts)
+
+        file_menu = self.menuBar().addMenu("&File")
+        file_menu.addAction(settings_act)
+        help_menu = self.menuBar().addMenu("&Help")
+        help_menu.addAction(shortcuts_act)
+
+    def _restore_chrome(self) -> None:
+        self._chat_view.set_return_sends(
+            as_bool(self._settings.value(KEY_RETURN_SENDS, True), True)
+        )
+        self._chat_view.set_inspector_open(
+            as_bool(self._settings.value(KEY_INSPECTOR_OPEN, True), True)
+        )
+
+    def _persist_chrome(self) -> None:
+        self._settings.setValue(KEY_INSPECTOR_OPEN, self._chat_view.inspector_open())
+        self._settings.setValue(KEY_RETURN_SENDS, self._chat_view.composer().return_sends())
+        cid = self._list.selected_id()
+        if cid is not None:
+            self._settings.setValue(KEY_LAST_CONVERSATION_ID, cid)
+        else:
+            self._settings.remove(KEY_LAST_CONVERSATION_ID)
+        self._settings.sync()
+
+    def _open_settings(self) -> None:
+        if self._settings_dialog is None:
+            db_path = getattr(self._store, "path", None)
+            self._settings_dialog = SettingsDialog(
+                self,
+                settings=self._settings,
+                db_path=Path(db_path) if db_path is not None else None,
+                log_path=default_log_path(),
+            )
+            self._settings_dialog.appearance_changed.connect(self._on_appearance)
+            self._settings_dialog.return_sends_changed.connect(self._chat_view.set_return_sends)
+        self._settings_dialog.reload()
+        self._settings_dialog.show()
+        self._settings_dialog.raise_()
+        self._settings_dialog.activateWindow()
+
+    def _open_shortcuts(self) -> None:
+        if self._shortcuts_dialog is None:
+            self._shortcuts_dialog = ShortcutsDialog(self)
+        self._shortcuts_dialog.show()
+        self._shortcuts_dialog.raise_()
+        self._shortcuts_dialog.activateWindow()
+
+    def _on_appearance(self, theme: str) -> None:
+        qt_app = QApplication.instance()
+        if isinstance(qt_app, QApplication):
+            apply_studio(qt_app, theme=theme)
+
+    def _on_inspector_open(self, visible: bool) -> None:
+        self._settings.setValue(KEY_INSPECTOR_OPEN, visible)
+
+    def _on_system_prompt(self, conversation_id: int, text: str) -> None:
+        if self._chat_service is not None:
+            self._chat_service.set_system_prompt(conversation_id, text)
+
     def _on_section(self, _key: str) -> None:
         self._sync_title()
 
@@ -166,6 +274,8 @@ class MainWindow(QMainWindow):
 
     def _on_selected(self, cid: object) -> None:
         self._sync_title()
+        if isinstance(cid, int):
+            self._settings.setValue(KEY_LAST_CONVERSATION_ID, cid)
         if not isinstance(cid, int):
             self._chat_view.set_conversation(None)
             return

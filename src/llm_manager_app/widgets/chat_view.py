@@ -1,4 +1,4 @@
-"""Column 3 chat: transcript, composer, stop, regenerate."""
+"""Column 3 chat: transcript, composer, inspector, stop, regenerate."""
 
 from __future__ import annotations
 
@@ -7,21 +7,27 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from llm_engine.domain.models import ChatTurn, Conversation
+from llm_engine.domain.models import ChatTurn, Conversation, GenerationParams
 from llm_manager_app.widgets.composer import Composer
+from llm_manager_app.widgets.inspector import Inspector
 from llm_manager_app.widgets.transcript import Transcript
 
 
 class ChatView(QWidget):
-    send_requested = Signal(int, str)
+    send_requested = Signal(int, str, object)
     stop_requested = Signal(int)
-    regenerate_requested = Signal(int)
+    regenerate_requested = Signal(int, object)
     turn_finished = Signal(int)
+    system_prompt_changed = Signal(int, str)
+    unload_requested = Signal()
+    restart_requested = Signal()
+    inspector_open_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -45,6 +51,13 @@ class ChatView(QWidget):
         self._banner.setWordWrap(True)
         self._banner.hide()
 
+        self._inspector_btn = QPushButton("Inspector", self)
+        self._inspector_btn.setObjectName("inspectorToggle")
+        self._inspector_btn.setCheckable(True)
+        self._inspector_btn.setChecked(True)
+        self._inspector_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._inspector_btn.toggled.connect(self._on_inspector_toggled)
+
         self._regen = QPushButton("Regenerate", self)
         self._regen.setObjectName("regenerateButton")
         self._regen.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -53,6 +66,7 @@ class ChatView(QWidget):
 
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.addWidget(self._inspector_btn)
         toolbar.addStretch(1)
         toolbar.addWidget(self._regen)
 
@@ -70,9 +84,25 @@ class ChatView(QWidget):
         body_layout.addWidget(self._transcript, 1)
         body_layout.addWidget(self._composer, 0)
 
+        self._inspector = Inspector(self)
+        self._inspector.system_prompt_changed.connect(self._on_system_prompt)
+        self._inspector.unload_requested.connect(self._on_inspector_unload)
+        self._inspector.restart_requested.connect(self._on_inspector_restart)
+
+        split = QSplitter(Qt.Orientation.Horizontal, self)
+        split.setObjectName("chatSplitter")
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(1)
+        split.addWidget(body)
+        split.addWidget(self._inspector)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 0)
+        split.setSizes([620, 240])
+        self._chat_split = split
+
         self._stack = QStackedWidget(self)
         self._stack.addWidget(self._empty)
-        self._stack.addWidget(body)
+        self._stack.addWidget(split)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -95,8 +125,38 @@ class ChatView(QWidget):
     def composer(self) -> Composer:
         return self._composer
 
+    def inspector(self) -> Inspector:
+        return self._inspector
+
+    def inspector_open(self) -> bool:
+        return self._inspector.isVisible()
+
+    def set_inspector_open(self, visible: bool) -> None:
+        blocked = self._inspector_btn.blockSignals(True)
+        self._inspector_btn.setChecked(visible)
+        self._inspector_btn.blockSignals(blocked)
+        self._inspector.setVisible(visible)
+        if visible:
+            sizes = self._chat_split.sizes()
+            if len(sizes) == 2 and sizes[1] == 0:
+                total = sum(sizes) or 860
+                self._chat_split.setSizes([max(1, total - 240), 240])
+        else:
+            left = sum(self._chat_split.sizes()) or 1
+            self._chat_split.setSizes([left, 0])
+
+    def set_return_sends(self, enabled: bool) -> None:
+        self._composer.set_return_sends(enabled)
+
+    def generation_params(self) -> GenerationParams:
+        return self._inspector.params()
+
     def banner_text(self) -> str:
         return self._banner.text() if self._banner.isVisible() else ""
+
+    def show_banner(self, text: str) -> None:
+        self._banner.setText(text)
+        self._banner.show()
 
     def set_conversation(self, conversation: Conversation | None) -> None:
         if conversation is None:
@@ -109,23 +169,29 @@ class ChatView(QWidget):
             self._composer.clear()
             self._composer.setEnabled(False)
             self._regen.setEnabled(False)
+            self._inspector.set_conversation(None)
             self._stack.setCurrentWidget(self._empty)
             return
         cid = conversation.summary.id
         if self.is_streaming(cid):
             self._cid = cid
-            self._stack.setCurrentIndex(1)
+            self._stack.setCurrentWidget(self._chat_split)
             self._transcript.set_turns(conversation.messages)
             self._transcript.restore_stream(self._buffer)
+            self._inspector.set_conversation(conversation)
+            self._inspector.set_generating(True)
             self._sync_enabled()
             return
         if self.keeping_error_buffer(cid) and self._cid == cid:
-            self._stack.setCurrentIndex(1)
+            self._stack.setCurrentWidget(self._chat_split)
             return
         self._cid = cid
         self._error_plain_id = None
-        self._stack.setCurrentIndex(1)
+        self._stack.setCurrentWidget(self._chat_split)
         self._transcript.set_turns(conversation.messages)
+        self._inspector.set_conversation(conversation)
+        if self._generating_id == cid:
+            self._inspector.set_generating(True)
         draft = self._rejected_drafts.pop(cid, None)
         if draft is not None:
             self._composer.set_text(draft)
@@ -161,8 +227,9 @@ class ChatView(QWidget):
         self._error_plain_id = None
         self._undo_assistant = self._transcript.drop_last_assistant()
         self._transcript.begin_stream()
+        self._inspector.set_generating(True)
         self._sync_enabled()
-        self.regenerate_requested.emit(cid)
+        self.regenerate_requested.emit(cid, self._inspector.params())
 
     def on_accepted(self, conversation_id: int, kind: str) -> None:
         del kind
@@ -177,6 +244,7 @@ class ChatView(QWidget):
         self._pending = None
         if self._generating_id == conversation_id:
             self._generating_id = None
+            self._inspector.set_generating(False)
         draft: str | None = None
         restore_user = False
         restore_turn: ChatTurn | None = None
@@ -219,10 +287,12 @@ class ChatView(QWidget):
         elapsed: float,
         tps: float,
     ) -> None:
-        del cancelled, chunks, elapsed, tps
+        del cancelled
         if conversation_id != self._generating_id:
             return
         self._generating_id = None
+        self._inspector.set_generating(False)
+        self._inspector.set_last_turn(chunks=chunks, elapsed=elapsed, tps=tps)
         if self._cid == conversation_id:
             self._transcript.finish_stream(parse_markdown=True)
         self._buffer = ""
@@ -235,6 +305,7 @@ class ChatView(QWidget):
         if conversation_id != self._generating_id:
             return
         self._generating_id = None
+        self._inspector.set_generating(False)
         if self._cid == conversation_id:
             self._transcript.keep_stream()
             self._error_plain_id = conversation_id
@@ -243,6 +314,15 @@ class ChatView(QWidget):
             self._composer.focus_edit()
         self._sync_enabled()
         self.turn_finished.emit(conversation_id)
+
+    def on_unloaded(self) -> None:
+        self._inspector.set_generating(False)
+
+    def on_unload_failed(self, code: str, message: str) -> None:
+        if self._generating_id is not None:
+            self._inspector.show_restart()
+        if code != "generating":
+            self.show_banner(message or code)
 
     def _on_send(self, text: str) -> None:
         cid = self._cid
@@ -260,11 +340,33 @@ class ChatView(QWidget):
         self._error_plain_id = None
         self._transcript.append_user(text)
         self._transcript.begin_stream()
+        self._inspector.set_generating(True)
         self._sync_enabled()
-        self.send_requested.emit(cid, text)
+        self.send_requested.emit(cid, text, self._inspector.params())
+
+    def _on_system_prompt(self, text: str) -> None:
+        if self._cid is None:
+            return
+        self.system_prompt_changed.emit(self._cid, text)
+
+    def _on_inspector_toggled(self, checked: bool) -> None:
+        self.set_inspector_open(checked)
+        self.inspector_open_changed.emit(checked)
+
+    def _on_inspector_unload(self) -> None:
+        self.stop()
+        self.unload_requested.emit()
+
+    def _on_inspector_restart(self) -> None:
+        self.stop()
+        self.show_banner("Unload requested.")
+        self.unload_requested.emit()
+        self.restart_requested.emit()
 
     def _sync_enabled(self) -> None:
         has = self._cid is not None
         busy = self._generating_id is not None or self._pending is not None
         self._composer.setEnabled(has and not busy)
         self._regen.setEnabled(has and bool(self._transcript.turns()) and not busy)
+        # System prompt stays editable during generate (next turn).
+        self._inspector.setEnabled(has)

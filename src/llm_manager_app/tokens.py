@@ -57,62 +57,31 @@ def system_font_family() -> str:
 
 def qss(palette: StudioPalette) -> str:
     family = system_font_family()
+    r = palette.radius_control
     return f"""
-    QMainWindow, QWidget#shell {{
-        background-color: {palette.canvas};
-        color: {palette.text};
-        font-family: "{family}";
+    QMainWindow, QDialog, QWidget#shell {{
+        background-color: {palette.canvas}; color: {palette.text}; font-family: "{family}";
     }}
-    QWidget#sidebar, QListWidget#sidebarNav {{
-        background-color: {palette.canvas};
-        color: {palette.text};
-        border: none;
-        outline: none;
+    QWidget#sidebar, QListWidget#sidebarNav, QWidget#listPane, QListView#listPane,
+    QListView#conversationView, QWidget#detailPane, QLabel#detailPane, QWidget#transcript {{
+        background-color: {palette.canvas}; color: {palette.text}; border: none; outline: none;
     }}
     QListWidget#sidebarNav::item {{
-        padding: 8px 12px;
-        margin: 0 8px 4px 8px;
-        border-radius: {palette.radius_control}px;
+        padding: 8px 12px; margin: 0 8px 4px 8px; border-radius: {r}px;
     }}
-    QListWidget#sidebarNav::item:selected {{
-        background-color: {palette.selection};
-        color: {palette.text};
+    QListWidget#sidebarNav::item:selected, QListView#conversationView::item:selected {{
+        background-color: {palette.selection}; color: {palette.text};
     }}
-    QWidget#listPane, QListView#listPane, QListView#conversationView {{
-        background-color: {palette.canvas};
-        color: {palette.text};
-        border: none;
-        outline: none;
-    }}
-    QListView#conversationView::item {{
-        padding: 8px;
-        border-radius: {palette.radius_control}px;
-    }}
-    QListView#conversationView::item:selected {{
-        background-color: {palette.selection};
-        color: {palette.text};
-    }}
-    QLineEdit#conversationSearch {{
-        background-color: {palette.elevated};
-        color: {palette.text};
-        border: none;
-        border-radius: {palette.radius_control}px;
-        padding: 6px 8px;
+    QListView#conversationView::item {{ padding: 8px; border-radius: {r}px; }}
+    QLineEdit#conversationSearch, QLineEdit#modelDirEdit, QLineEdit#dbPathEdit {{
+        background-color: {palette.elevated}; color: {palette.text};
+        border: none; border-radius: {r}px; padding: 6px 8px;
     }}
     QPushButton#newChatButton {{
-        background-color: transparent;
-        color: {palette.accent};
-        border: none;
-        padding: 6px 8px;
+        background-color: transparent; color: {palette.accent}; border: none; padding: 6px 8px;
     }}
-    QLabel#listEmpty, QLabel#chatEmpty {{
-        color: {palette.secondary};
-        background: transparent;
-    }}
-    QWidget#detailPane, QLabel#detailPane, QWidget#transcript {{
-        background-color: {palette.canvas};
-        color: {palette.text};
-        border: none;
+    QLabel#listEmpty, QLabel#chatEmpty, QLabel#lastTurnLabel, QLabel#settingsHint {{
+        color: {palette.secondary}; background: transparent;
     }}
     QTextBrowser#transcriptHistory, QPlainTextEdit#transcriptStream {{
         background-color: {palette.canvas}; color: {palette.text}; border: none;
@@ -125,14 +94,16 @@ def qss(palette: StudioPalette) -> str:
         background-color: {palette.accent}; color: {palette.text};
         border: none; border-radius: 14px;
     }}
-    QLabel#chatBanner {{ color: {palette.danger}; }}
-    QPushButton#regenerateButton {{
+    QLabel#chatBanner, QLabel#settingsError {{ color: {palette.danger}; }}
+    QPushButton#regenerateButton, QPushButton#inspectorToggle {{
         background: transparent; color: {palette.accent}; border: none;
     }}
-    QSplitter::handle {{
-        background-color: {palette.separator};
-        width: 1px;
+    QWidget#inspector, QPlainTextEdit#systemPromptEdit {{
+        background-color: {palette.elevated}; color: {palette.text}; border: none;
     }}
+    QPlainTextEdit#systemPromptEdit {{ border-radius: {r}px; padding: 6px; }}
+    QPushButton#unloadButton, QPushButton#restartButton {{ color: {palette.danger}; }}
+    QSplitter::handle {{ background-color: {palette.separator}; width: 1px; }}
     """
 
 
@@ -141,8 +112,20 @@ def palette_for_app(app: QApplication) -> StudioPalette:
     return DARK if window.lightness() < 128 else LIGHT
 
 
-def apply_studio(app: QApplication, palette: StudioPalette | None = None) -> StudioPalette:
-    chosen = palette if palette is not None else palette_for_app(app)
+def apply_studio(
+    app: QApplication,
+    palette: StudioPalette | None = None,
+    *,
+    theme: str | None = None,
+) -> StudioPalette:
+    if palette is None:
+        key = (theme or "").strip().lower()
+        if key == "light":
+            palette = LIGHT
+        elif key == "dark":
+            palette = DARK
+        else:
+            palette = palette_for_app(app)
     app.setFont(QFont(system_font_family()))
-    app.setStyleSheet(qss(chosen))
-    return chosen
+    app.setStyleSheet(qss(palette))
+    return palette
