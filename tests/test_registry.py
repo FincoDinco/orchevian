@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from llm_engine.backends.fake import FakeBackend
+from llm_engine.backends.gguf import GGUFBackend
+from llm_engine.backends.mlx import MLXBackend
 from llm_engine.backends.ollama import OllamaBackend
 from llm_engine.backends.registry import BackendRegistry, default_backends
 from llm_engine.cli import main
@@ -44,18 +46,40 @@ class _DownBackend:
         raise AssertionError("list_models must not be called when unavailable")
 
 
-def test_default_registry_is_ollama_only(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_registry_includes_ollama_mlx_gguf(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LLM_ENGINE_FAKE_BACKEND", raising=False)
     backends = default_backends()
     try:
-        assert len(backends) == 1
+        assert [b.name for b in backends] == [
+            BackendName.OLLAMA,
+            BackendName.MLX,
+            BackendName.GGUF,
+        ]
         assert isinstance(backends[0], OllamaBackend)
-        assert backends[0].name == BackendName.OLLAMA
+        assert isinstance(backends[1], MLXBackend)
+        assert isinstance(backends[2], GGUFBackend)
     finally:
         for backend in backends:
             closer = getattr(backend, "close", None)
             if callable(closer):
                 closer()
+
+
+def test_default_list_models_reports_mlx_gguf_availability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LLM_ENGINE_FAKE_BACKEND", raising=False)
+    registry = BackendRegistry()
+    try:
+        _models, availability = registry.list_models()
+    finally:
+        registry.close()
+    assert "ollama" in availability
+    assert "mlx" in availability
+    assert "gguf" in availability
+    mlx_ok, mlx_reason = availability["mlx"]
+    if not mlx_ok:
+        assert mlx_reason == "MLX requires macOS Apple Silicon and extra 'mlx'"
 
 
 def test_env_flag_registers_fake_instead_of_ollama(monkeypatch: pytest.MonkeyPatch) -> None:

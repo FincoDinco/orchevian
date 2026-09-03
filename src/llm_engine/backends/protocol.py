@@ -28,3 +28,4 @@ class ModelHandle:
 
     model: LocalModel
     options: LoadOptions = field(default_factory=LoadOptions)
+    runtime: object | None = None

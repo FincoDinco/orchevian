@@ -5,6 +5,9 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 
+from llm_engine import config
+from llm_engine.backends.gguf import GGUFBackend
+from llm_engine.backends.mlx import MLXBackend
 from llm_engine.backends.ollama import OllamaBackend
 from llm_engine.backends.protocol import InferenceBackend
 from llm_engine.domain.errors import EngineError
@@ -18,7 +21,15 @@ def default_backends() -> list[InferenceBackend]:
         from llm_engine.backends.fake import FakeBackend
 
         return [FakeBackend()]
-    return [OllamaBackend()]
+    try:
+        model_dir = config.load().model_dir
+    except EngineError:
+        model_dir = config.default_model_dir()
+    return [
+        OllamaBackend(),
+        MLXBackend(model_dir / "mlx"),
+        GGUFBackend(model_dir / "gguf"),
+    ]
 
 
 class BackendRegistry:
