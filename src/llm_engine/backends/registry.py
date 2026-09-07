@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
+from functools import partial
 
 from llm_engine import config
 from llm_engine.backends.gguf import GGUFBackend
 from llm_engine.backends.mlx import MLXBackend
 from llm_engine.backends.ollama import OllamaBackend
+from llm_engine.backends.process import ProcessBackend
 from llm_engine.backends.protocol import InferenceBackend
 from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import LocalModel
@@ -23,9 +25,9 @@ def default_backends(cfg: config.EngineConfig | None = None) -> list[InferenceBa
         return [FakeBackend()]
     model_dir = (cfg if cfg is not None else config.load()).model_dir
     return [
-        OllamaBackend(),
-        MLXBackend(model_dir / "mlx"),
-        GGUFBackend(model_dir / "gguf"),
+        ProcessBackend(OllamaBackend(), OllamaBackend),
+        ProcessBackend(MLXBackend(model_dir / "mlx"), partial(MLXBackend, model_dir / "mlx")),
+        ProcessBackend(GGUFBackend(model_dir / "gguf"), partial(GGUFBackend, model_dir / "gguf")),
     ]
 
 

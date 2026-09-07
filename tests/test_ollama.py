@@ -47,7 +47,7 @@ def _model(name: str = "qwen3:8b") -> LocalModel:
 
 
 def _generate(backend: OllamaBackend, cancel: threading.Event | None = None) -> list[str]:
-    handle = backend.load(_model(), LoadOptions(n_ctx=8192))
+    handle = ModelHandle(_model(), LoadOptions(n_ctx=8192))
     token = cancel if cancel is not None else threading.Event()
     return list(
         backend.stream_generate(
@@ -156,9 +156,15 @@ def test_list_models_http_error_raises(make_backend: Callable[[Handler], OllamaB
     assert exc.value.code == "backend_unavailable"
 
 
-def test_load_is_noop_and_stores_n_ctx(make_backend: Callable[[Handler], OllamaBackend]) -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
-        raise AssertionError("load must not hit the network")
+def test_load_preloads_and_unload_releases_model(
+    make_backend: Callable[[Handler], OllamaBackend],
+) -> None:
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/generate"
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"done": True})
 
     backend = make_backend(handler)
     model = _model()
@@ -167,6 +173,30 @@ def test_load_is_noop_and_stores_n_ctx(make_backend: Callable[[Handler], OllamaB
     assert handle.model is model
     assert handle.options.n_ctx == 4096
     backend.unload(handle)
+    assert requests == [
+        {"model": model.ref.name, "stream": False, "options": {"num_ctx": 4096}},
+        {"model": model.ref.name, "stream": False, "keep_alive": 0},
+    ]
+
+
+@pytest.mark.parametrize("payload", [{"done": False}, {"error": "out of memory"}, []])
+def test_load_requires_ollama_confirmation(make_backend, payload):
+    backend = make_backend(lambda request: httpx.Response(200, json=payload))
+    with pytest.raises(EngineError):
+        backend.load(_model())
+
+
+def test_unresponsive_ollama_unload_is_bounded_and_reports_recovery(make_backend):
+    def handler(request):
+        assert request.extensions["timeout"]["read"] == 5.0
+        raise httpx.ReadTimeout("stuck", request=request)
+
+    backend = make_backend(handler)
+    with pytest.raises(EngineError) as exc:
+        backend.unload(ModelHandle(_model()))
+    assert exc.value.code == "stop_failed"
+    assert "did not confirm unloading" in str(exc.value)
+    assert "ollama stop qwen3:8b" in str(exc.value)
 
 
 def test_stream_generate_yields_deltas_and_sends_num_ctx(
@@ -223,7 +253,7 @@ def test_stream_generate_honors_cancel_and_closes_response(
         return response
 
     backend = make_backend(handler)
-    handle = backend.load(_model())
+    handle = ModelHandle(_model())
     chunks: list[str] = []
     for chunk in backend.stream_generate(
         handle, [ChatTurn(role="user", content="hi")], GenerationParams(), cancel
@@ -254,7 +284,7 @@ def test_stream_generate_cancel_closes_blocked_read(
         return httpx.Response(200, stream=stream)
 
     backend = make_backend(handler)
-    handle = backend.load(_model())
+    handle = ModelHandle(_model())
     cancel = threading.Event()
     got_first = threading.Event()
     finished = threading.Event()

@@ -50,6 +50,7 @@ class ModelPicker(QToolButton):
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.setAutoRaise(True)
+        self.setArrowType(Qt.ArrowType.DownArrow)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
 

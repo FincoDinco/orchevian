@@ -71,6 +71,26 @@ def test_load_invokes_on_progress() -> None:
     assert len(fake.load_calls) == 1
 
 
+@pytest.mark.parametrize("cached", [False, True])
+def test_stop_at_load_completion_does_not_leave_a_loaded_handle(cached) -> None:
+    model = _model(BackendName.OLLAMA, "fake")
+    session, fake = _session(model)
+    if cached:
+        session.load(model.ref)
+
+    def progress(value):
+        if value == 1.0:
+            session.request_stop()
+
+    with pytest.raises(EngineError) as exc:
+        session.load(model.ref, on_progress=progress)
+    assert exc.value.code == "cancelled"
+    assert session.status().loaded is None
+    assert not session.status().generating
+    assert len(fake.unload_calls) == 1
+    assert session.load(model.ref).ref == model.ref
+
+
 def test_load_same_ref_and_n_ctx_is_noop() -> None:
     model = _model(BackendName.OLLAMA, "fake")
     session, fake = _session(model)

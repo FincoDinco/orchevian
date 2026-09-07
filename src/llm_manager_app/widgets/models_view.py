@@ -9,16 +9,22 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
-from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal
-from PySide6.QtGui import QCloseEvent, QDesktopServices, QFont
+from PySide6.QtCore import QModelIndex, QObject, QRect, QSize, Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QCloseEvent, QColor, QDesktopServices, QFont, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QScrollArea,
+    QSplitter,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -26,6 +32,8 @@ from PySide6.QtWidgets import (
 from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import LoadOptions, LocalModel, ModelRef
 from llm_engine.services.session import SessionStatus
+from llm_manager_app.icons import icon
+from llm_manager_app.tokens import current_palette, qcolor
 
 _BACKEND_ORDER = ("ollama", "mlx", "gguf")
 _BACKEND_LABELS = {
@@ -34,8 +42,11 @@ _BACKEND_LABELS = {
     "gguf": "GGUF",
 }
 _ID_ROLE = Qt.ItemDataRole.UserRole
+_META_ROLE = Qt.ItemDataRole.UserRole + 1
 _UNITS = ("B", "KB", "MB", "GB", "TB")
 _SHUTDOWN_WAIT_MS = 6000
+_ROW_H = 64
+_HEADER_H = 36
 
 
 class Catalog(Protocol):
@@ -73,6 +84,67 @@ def _format_size(size_bytes: int) -> str:
     if unit == "B":
         return f"{int(value)} B"
     return f"{value:.1f} {unit}"
+
+
+class ModelsDelegate(QStyledItemDelegate):
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        del option
+        if index.data(_ID_ROLE):
+            return QSize(160, _ROW_H)
+        return QSize(160, _HEADER_H)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        palette = current_palette()
+        model_id = index.data(_ID_ROLE)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        rect = option.rect.adjusted(4, 1, -4, -1)
+        if model_id and (selected or hovered):
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(qcolor(palette.selection))
+            painter.drawRoundedRect(rect, palette.radius_control, palette.radius_control)
+        title = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        font = QFont(option.font)
+        if not model_id:
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QColor(palette.secondary))
+            text_rect = rect.adjusted(10, 0, -10, 0)
+            painter.drawText(
+                text_rect,
+                Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine,
+                title,
+            )
+            painter.restore()
+            return
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        painter.setPen(QColor(palette.text))
+        title_rect = QRect(rect.x() + 14, rect.y() + 10, rect.width() - 28, 22)
+        elided = painter.fontMetrics().elidedText(
+            title, Qt.TextElideMode.ElideRight, title_rect.width()
+        )
+        painter.drawText(
+            title_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine,
+            elided,
+        )
+        meta = str(index.data(_META_ROLE) or "")
+        if meta:
+            meta_font = QFont(option.font)
+            if meta_font.pointSize() > 0:
+                meta_font.setPointSize(max(11, meta_font.pointSize() - 1))
+            painter.setFont(meta_font)
+            painter.setPen(QColor(palette.secondary))
+            meta_rect = QRect(rect.x() + 14, rect.y() + 34, rect.width() - 28, 20)
+            painter.drawText(
+                meta_rect,
+                Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine,
+                meta,
+            )
+        painter.restore()
 
 
 def _reveal_label() -> str:
@@ -118,6 +190,7 @@ class ModelsView(QWidget):
     refresh_requested = Signal()
     load_requested = Signal(object)
     unload_requested = Signal()
+    stop_requested = Signal()
 
     _listed = Signal(object, object)
     _loaded = Signal(object)
@@ -156,15 +229,50 @@ class ModelsView(QWidget):
         self._list.setObjectName("modelsList")
         self._list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._list.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._list.setUniformItemSizes(True)
+        self._list.setUniformItemSizes(False)
+        self._list.setItemDelegate(ModelsDelegate(self._list))
+        self._list.setMouseTracking(True)
+        self._list.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._list.currentItemChanged.connect(self._on_current_item)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
-        layout.addWidget(self._banner)
-        layout.addWidget(self._list, 1)
+        self._search = QLineEdit(self)
+        self._search.setObjectName("modelSearch")
+        self._search.setPlaceholderText("Search models")
+        self._search.setClearButtonEnabled(True)
+        self._search.addAction(icon("search"), QLineEdit.ActionPosition.LeadingPosition)
+        self._search.textChanged.connect(self._filter_models)
+        self._catalog_pane = QWidget(self)
+        catalog_layout = QVBoxLayout(self._catalog_pane)
+        catalog_layout.setContentsMargins(0, 0, 16, 0)
+        catalog_layout.setSpacing(16)
+        catalog_layout.addWidget(self._search)
+        catalog_layout.addWidget(self._list, 1)
+        self._list_empty = QLabel("No models yet. Refresh to check your backends.", self)
+        self._list_empty.setObjectName("catalogEmpty")
+        self._list_empty.setWordWrap(True)
+        catalog_layout.addWidget(self._list_empty)
+
+        heading = QVBoxLayout()
+        title = QLabel("Model library", self)
+        title.setObjectName("pageTitle")
+        self._summary = QLabel("Your local models, in one place.", self)
+        self._summary.setObjectName("pageSubtitle")
+        heading.addWidget(title)
+        heading.addWidget(self._summary)
+        self._refresh_btn = QPushButton("Refresh", self)
+        self._refresh_btn.setIcon(icon("refresh"))
+        self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._refresh_btn.clicked.connect(self.refresh)
+        header = QHBoxLayout()
+        header.addLayout(heading, 1)
+        header.addWidget(self._refresh_btn)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(28, 24, 28, 24)
+        self._layout.setSpacing(24)
+        self._layout.addLayout(header)
+        self._layout.addWidget(self._banner)
+        self._layout.addWidget(self._catalog_pane, 1)
 
         self._detail = QWidget(self)
         self._detail.setObjectName("detailPane")
@@ -181,6 +289,29 @@ class ModelsView(QWidget):
         self._body.setTextFormat(Qt.TextFormat.PlainText)
         self._body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._body.setText("Select a model")
+        self._model_name = QLabel("Select a model", self._detail)
+        self._model_name.setObjectName("modelTitle")
+        self._model_name.setTextFormat(Qt.TextFormat.PlainText)
+        self._model_name.setWordWrap(True)
+        self._model_state = QLabel("Inspect a model to see its details and start a conversation.")
+        self._model_state.setObjectName("pageSubtitle")
+        self._model_state.setWordWrap(True)
+        self._facts = QWidget(self._detail)
+        self._facts.setObjectName("modelFacts")
+        self._facts.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        facts_layout = QHBoxLayout(self._facts)
+        facts_layout.setContentsMargins(18, 18, 18, 18)
+        self._fact_values: dict[str, QLabel] = {}
+        for label in ("BACKEND", "DISK SIZE"):
+            column = QVBoxLayout()
+            caption = QLabel(label, self._facts)
+            caption.setObjectName("eyebrow")
+            value = QLabel("—", self._facts)
+            value.setObjectName("factValue")
+            column.addWidget(caption)
+            column.addWidget(value)
+            facts_layout.addLayout(column, 1)
+            self._fact_values[label] = value
 
         self._load_btn = QPushButton("Load", self._detail)
         self._load_btn.setObjectName("loadButton")
@@ -188,6 +319,10 @@ class ModelsView(QWidget):
         self._unload_btn = QPushButton("Unload", self._detail)
         self._unload_btn.setObjectName("unloadButton")
         self._unload_btn.clicked.connect(self.unload_loaded)
+        self._stop_btn = QPushButton("Cancel loading", self._detail)
+        self._stop_btn.setObjectName("cancelModelLoadButton")
+        self._stop_btn.clicked.connect(self._cancel_load)
+        self._stop_btn.hide()
         self._reveal_btn = QPushButton(_reveal_label(), self._detail)
         self._reveal_btn.setObjectName("revealButton")
         self._reveal_btn.clicked.connect(self.reveal_selected)
@@ -200,16 +335,26 @@ class ModelsView(QWidget):
         actions.setSpacing(8)
         actions.addWidget(self._load_btn)
         actions.addWidget(self._unload_btn)
+        actions.addWidget(self._stop_btn)
         actions.addStretch(1)
 
         detail_layout = QVBoxLayout(self._detail)
-        detail_layout.setContentsMargins(8, 8, 8, 8)
-        detail_layout.setSpacing(8)
+        detail_layout.setContentsMargins(24, 8, 4, 8)
+        detail_layout.setSpacing(20)
         detail_layout.addWidget(self._error)
-        detail_layout.addWidget(self._body, 1)
+        detail_layout.addWidget(self._model_name)
+        detail_layout.addWidget(self._model_state)
+        detail_layout.addWidget(self._chat_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        detail_layout.addWidget(self._facts)
+        details_label = QLabel("MODEL DETAILS", self._detail)
+        details_label.setObjectName("eyebrow")
+        detail_layout.addWidget(details_label)
+        detail_layout.addWidget(self._body)
         detail_layout.addLayout(actions)
         detail_layout.addWidget(self._reveal_btn, 0, Qt.AlignmentFlag.AlignLeft)
-        detail_layout.addWidget(self._chat_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        detail_layout.addStretch(1)
+        for button in (self._load_btn, self._unload_btn, self._chat_btn, self._reveal_btn):
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
 
         queued = Qt.ConnectionType.QueuedConnection
         self._listed.connect(self._on_listed, queued)
@@ -222,6 +367,60 @@ class ModelsView(QWidget):
     @property
     def detail(self) -> QWidget:
         return self._detail
+
+    def embed_detail(self) -> None:
+        """Combine catalog and details into one full workspace."""
+        self._layout.removeWidget(self._catalog_pane)
+        split = QSplitter(Qt.Orientation.Horizontal, self)
+        split.setObjectName("modelWorkspaceSplitter")
+        split.setHandleWidth(1)
+        split.setChildrenCollapsible(False)
+        split.addWidget(self._catalog_pane)
+        self._catalog_pane.setMinimumWidth(220)
+        scroll = QScrollArea(split)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(self._detail)
+        self._detail.show()
+        split.addWidget(scroll)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 2)
+        split.setSizes([300, 560])
+        self._layout.addWidget(split, 1)
+
+    def _filter_models(self) -> None:
+        query = self._search.text().strip().casefold()
+        header: QListWidgetItem | None = None
+        matches = 0
+        visible = 0
+        for row in range(self._list.count()):
+            item = self._list.item(row)
+            if not item.data(_ID_ROLE):
+                if header is not None:
+                    header.setHidden(bool(query) and matches == 0)
+                header, matches = item, 0
+                continue
+            match = query in f"{item.text()} {item.data(_ID_ROLE)}".casefold()
+            item.setHidden(not match)
+            matches += int(match)
+            visible += int(match)
+        if header is not None:
+            header.setHidden(bool(query) and matches == 0)
+        self._list_empty.setVisible(visible == 0)
+        self._list_empty.setText(
+            "No models match your search."
+            if query
+            else "No models found. Check your backend connection, then refresh."
+        )
+        current = self._list.currentItem()
+        if current is not None and current.isHidden():
+            self._list.setCurrentRow(-1)
+        if self._list.currentItem() is None:
+            for row in range(self._list.count()):
+                item = self._list.item(row)
+                if item.data(_ID_ROLE) and not item.isHidden():
+                    self._list.setCurrentItem(item)
+                    break
 
     def selected_model(self) -> LocalModel | None:
         item = self._list.currentItem()
@@ -245,6 +444,10 @@ class ModelsView(QWidget):
 
     def job_kind(self) -> str | None:
         return self._job_kind
+
+    def focus_search(self) -> None:
+        self._search.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._search.selectAll()
 
     def refresh(self) -> bool:
         if self._external_jobs:
@@ -310,6 +513,11 @@ class ModelsView(QWidget):
                 self._emit_job(self._job_done.emit)
 
         self._start_job(work, "unload")
+
+    def _cancel_load(self) -> None:
+        self._stop_btn.setEnabled(False)
+        self._stop_btn.setText("Stopping…")
+        self.stop_requested.emit()
 
     def apply_listed(self, models: object, availability: object) -> None:
         self._on_listed(models, availability)
@@ -428,9 +636,11 @@ class ModelsView(QWidget):
             for model in group:
                 item = QListWidgetItem(model.ref.name)
                 item.setData(_ID_ROLE, model.ref.id)
+                item.setData(_META_ROLE, _format_size(model.size_bytes))
                 self._list.addItem(item)
                 if first_id is None:
                     first_id = model.ref.id
+        self._sync_list_meta()
 
         if banners:
             self._banner.setText("\n".join(banners))
@@ -441,6 +651,12 @@ class ModelsView(QWidget):
 
         target = keep if keep in self._models_by_id else first_id
         self.select_id(target)
+        count = len(rows)
+        total = sum(model.size_bytes for model in rows)
+        self._summary.setText(
+            f"{count} local model{'s' if count != 1 else ''} · {_format_size(total)} on disk"
+        )
+        self._filter_models()
         self._render_detail()
         self.refreshed.emit()
 
@@ -485,10 +701,47 @@ class ModelsView(QWidget):
         model = self.selected_model()
         status = self._catalog.status()
         if model is None:
-            self._body.setText("Select a model")
+            self._model_name.setText("Select a model")
+            self._model_state.setText("Choose a model from the library to inspect it.")
+            self._body.clear()
+            self._facts.hide()
         else:
-            self._body.setText(_detail_text(model, status))
+            self._model_name.setText(model.ref.name)
+            is_loaded = status.loaded is not None and status.loaded.ref == model.ref
+            self._model_state.setText(
+                "Generating a response"
+                if is_loaded and status.generating
+                else "Loaded · Ready for a conversation"
+                if is_loaded
+                else "Available on this device"
+                if model.available
+                else model.unavailable_reason or "Currently unavailable"
+            )
+            self._facts.show()
+            self._fact_values["BACKEND"].setText(_backend_label(str(model.ref.backend)))
+            self._fact_values["DISK SIZE"].setText(_format_size(model.size_bytes))
+            self._body.setText(_detail_text(model))
+        self._sync_list_meta()
         self._sync_actions()
+
+    def _sync_list_meta(self) -> None:
+        status = self._catalog.status()
+        loaded_id = None if status.loaded is None else status.loaded.ref.id
+        for row in range(self._list.count()):
+            item = self._list.item(row)
+            if item is None:
+                continue
+            model_id = item.data(_ID_ROLE)
+            if not model_id:
+                continue
+            model = self._models_by_id.get(str(model_id))
+            if model is None:
+                continue
+            size = _format_size(model.size_bytes)
+            if loaded_id == model.ref.id:
+                item.setData(_META_ROLE, f"Loaded · {size}")
+            else:
+                item.setData(_META_ROLE, size)
 
     def _sync_actions(self) -> None:
         model = self.selected_model()
@@ -496,10 +749,16 @@ class ModelsView(QWidget):
         has_model = model is not None
         loaded = status.loaded
         busy = self._busy or self._session_busy()
+        self._refresh_btn.setEnabled(not self._busy)
+        self._refresh_btn.setText("Refreshing…" if self._job_kind == "refresh" else "Refresh")
         self._load_btn.setEnabled(has_model and not busy)
         self._unload_btn.setEnabled(loaded is not None and not busy)
         self._reveal_btn.setEnabled(has_model and model.path is not None and not self._busy)
         self._chat_btn.setEnabled(has_model)
+        self._stop_btn.setVisible(self._external_jobs and self._job_kind == "load")
+        if self._job_kind != "load":
+            self._stop_btn.setEnabled(True)
+            self._stop_btn.setText("Cancel loading")
         if self._busy and self._job_kind == "load":
             self._load_btn.setText("Loading…")
         else:
@@ -514,30 +773,14 @@ class ModelsView(QWidget):
             self._error.hide()
 
 
-def _detail_text(model: LocalModel, status: SessionStatus) -> str:
-    loaded = status.loaded
-    if status.generating:
-        state = "generating"
-    elif loaded is not None and loaded.ref == model.ref:
-        state = "loaded"
-    elif loaded is not None:
-        state = f"loaded {loaded.ref.id}"
+def _detail_text(model: LocalModel) -> str:
+    lines = [model.ref.id, ""]
+    if model.path is not None:
+        lines.append(f"Location\n{model.path}")
     else:
-        state = "not loaded"
-    path = str(model.path) if model.path is not None else "—"
-    modified = "—"
+        lines.append(f"Storage managed by {_backend_label(str(model.ref.backend))}.")
     if model.modified_at is not None:
-        modified = model.modified_at.isoformat(sep=" ", timespec="seconds")
-    lines = [
-        model.ref.name,
-        model.ref.id,
-        "",
-        f"Backend: {_backend_label(str(model.ref.backend))}",
-        f"Size: {_format_size(model.size_bytes)}",
-        f"Path: {path}",
-        f"Modified: {modified}",
-        f"Status: {state}",
-    ]
+        lines.append(f"Updated {model.modified_at:%b %d, %Y}")
     if model.details:
         lines.append("")
         lines.extend(f"{key}: {value}" for key, value in model.details.items())

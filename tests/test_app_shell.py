@@ -9,7 +9,7 @@ import pytest
 
 from llm_engine.backends.fake import FakeBackend
 from llm_engine.backends.registry import BackendRegistry
-from llm_manager_app.tokens import DARK, LIGHT, qss
+from llm_manager_app.tokens import DARK, LIGHT, named_tab_width, qcolor, qss
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_SRC = ROOT / "src" / "llm_manager_app"
@@ -48,29 +48,50 @@ def test_app_sources_do_not_import_sqlite3_or_mlx_lm() -> None:
     assert offenders == []
 
 
-def test_studio_dark_tokens_match_design() -> None:
-    assert DARK.canvas == "#1C1C1E"
-    assert DARK.elevated == "#2C2C2E"
-    assert DARK.text == "#F5F5F7"
-    assert DARK.secondary == "#8E8E93"
-    assert DARK.accent == "#5B8DEF"
-    assert DARK.danger == "#FF453A"
-    assert DARK.radius_control == 8
-    assert DARK.radius_composer == 10
+@pytest.mark.parametrize("palette", [DARK, LIGHT])
+def test_studio_text_has_readable_contrast(palette) -> None:
+    def luminance(value: str) -> float:
+        color = qcolor(value)
+        channels = (color.redF(), color.greenF(), color.blueF())
+        linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+        return sum(c * weight for c, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+    for foreground in (palette.text, palette.secondary):
+        for background in (palette.canvas, palette.sidebar, palette.elevated):
+            light, dark = sorted((luminance(foreground), luminance(background)), reverse=True)
+            assert (light + 0.05) / (dark + 0.05) >= 4.5
 
 
-def test_studio_light_tokens_match_design() -> None:
-    assert LIGHT.canvas == "#F2F2F7"
-    assert LIGHT.elevated == "#FFFFFF"
-    assert LIGHT.text == "#1C1C1E"
-    assert LIGHT.secondary == "#6C6C70"
-    assert LIGHT.accent == "#3B6FDB"
-    assert LIGHT.danger == "#FF3B30"
+def test_named_tab_width_is_one_tab_not_the_pane() -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QWidget
+
+    host = QWidget()
+    host.setFont(app.font())
+    chats = named_tab_width(host, ("Chats",))
+    models = named_tab_width(host, ("Models",))
+    both = named_tab_width(host, ("Chats", "Models"))
+    assert both == max(chats, models)
+    assert both < 160
+
+
+def test_qcolor_parses_studio_rgba_selection() -> None:
+    color = qcolor("rgba(91, 141, 239, 56)")
+    assert color.isValid()
+    assert color.red() == 91
+    assert color.green() == 141
+    assert color.blue() == 239
+    assert color.alpha() == 56
+    assert qcolor(DARK.accent).name().upper() == DARK.accent
 
 
 def test_studio_qss_is_small_and_uses_named_colors() -> None:
     sheet = qss(DARK)
-    assert len(sheet.splitlines()) < 80
+    assert len(sheet.splitlines()) < 220
     assert DARK.canvas in sheet
     assert DARK.selection in sheet
     assert DARK.danger in sheet
@@ -118,7 +139,7 @@ def _window(tmp_path: Path, registry: BackendRegistry | None = None, library=Non
     return window, store, library
 
 
-def test_main_window_three_column_splitter(tmp_path: Path) -> None:
+def test_main_window_unified_sidebar_and_workspace(tmp_path: Path) -> None:
     try:
         _qapp()
     except Exception as exc:
@@ -140,14 +161,12 @@ def test_main_window_three_column_splitter(tmp_path: Path) -> None:
     try:
         splitter = window.findChild(QSplitter)
         assert splitter is not None
-        assert splitter.count() == 3
+        assert splitter.count() == 2
         sidebar = splitter.widget(0)
-        list_pane = splitter.widget(1)
-        detail = splitter.widget(2)
+        detail = splitter.widget(1)
         assert isinstance(sidebar, Sidebar)
-        assert isinstance(list_pane, QStackedWidget)
-        assert isinstance(list_pane.currentWidget(), ConversationList)
-        view = list_pane.findChild(QListView, "conversationView")
+        assert sidebar.findChild(ConversationList) is window._list
+        view = sidebar.findChild(QListView, "conversationView")
         assert view is not None
         model = view.model()
         assert model is not None and model.rowCount() == 0
@@ -164,6 +183,81 @@ def test_main_window_three_column_splitter(tmp_path: Path) -> None:
         window.close()
         if store is not None:
             store.close()
+
+
+def test_welcome_creates_a_conversation(tmp_path: Path) -> None:
+    app = _qapp()
+    from PySide6.QtWidgets import QPushButton
+
+    window, store, library = _window(tmp_path)
+    try:
+        window.show()
+        app.processEvents()
+        button = window.findChild(QPushButton, "welcomeNewChat")
+        assert button is not None and button.isVisible()
+        button.click()
+        app.processEvents()
+        rows = library.list_conversations()
+        assert len(rows) == 1
+        assert window._chat_view.conversation_id() == rows[0].id
+        assert window._chat_view.composer().isVisible()
+    finally:
+        window.close()
+        store.close()
+
+
+def test_starter_places_a_draft_without_sending(tmp_path: Path) -> None:
+    app = _qapp()
+    from PySide6.QtWidgets import QPushButton
+
+    from llm_engine.domain.models import BackendName, ModelRef
+
+    window, store, library = _window(tmp_path)
+    try:
+        cid = library.create_conversation(model=ModelRef(BackendName.OLLAMA, "fake")).summary.id
+        window._list.refresh(select_id=cid)
+        window.show()
+        app.processEvents()
+        starter = window._chat_view._starters.findChild(QPushButton, "starterButton")
+        assert starter is not None and starter.isVisible()
+        starter.click()
+        assert window._chat_view.composer().text() == "Help me think through an idea: "
+        assert library.get_conversation(cid).messages == ()
+        assert not window._chat_view.is_streaming()
+    finally:
+        window.close()
+        store.close()
+
+
+def test_sidebar_chat_opens_from_models_and_find_expands_sidebar(tmp_path: Path) -> None:
+    app = _qapp()
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window, store, library = _window(tmp_path)
+    try:
+        cid = library.create_conversation().summary.id
+        window._list.refresh(select_id=cid)
+        window.show()
+        window._sidebar.select_section("models")
+        app.processEvents()
+        view = window._list._view
+        index = window._list._model.index_for_id(cid)
+        QTest.mouseClick(
+            view.viewport(), Qt.MouseButton.LeftButton, pos=view.visualRect(index).center()
+        )
+        app.processEvents()
+        assert window._sidebar.current_section() == "chats"
+        assert window._chat_view.conversation_id() == cid
+        assert window._detail_stack.currentWidget() is window._chat_view
+        window._sidebar.set_collapsed(True)
+        window._focus_search()
+        app.processEvents()
+        assert window._list._search.isVisible()
+        assert window._list._search.hasFocus()
+    finally:
+        window.close()
+        store.close()
 
 
 def test_sidebar_chats_and_models(tmp_path: Path) -> None:
@@ -184,6 +278,102 @@ def test_sidebar_chats_and_models(tmp_path: Path) -> None:
         assert sidebar.current_section() == "models"
         assert seen == ["models"]
         assert window.windowTitle() == "Models — LLM Manager"
+    finally:
+        window.close()
+        if store is not None:
+            store.close()
+
+
+def test_sidebar_collapses_to_named_tab_width(tmp_path: Path) -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QToolButton, QTreeView
+
+    window, store, _library_svc = _window(tmp_path)
+    try:
+        window.show()
+        app.processEvents()
+        sidebar = window._sidebar
+        tree = window.findChild(QTreeView, "sidebarNav")
+        btn = window.findChild(QToolButton, "sidebarCollapse")
+        assert tree is not None and btn is not None
+        assert not sidebar.is_collapsed()
+        rail = sidebar.tab_width()
+        assert rail < 160
+        expanded = window._splitter.sizes()[0]
+        assert expanded > rail
+        chats = sidebar._chats_item
+        assert chats is not None
+        parent = chats.index()
+        assert not tree.isRowHidden(0, parent)
+        btn.click()
+        app.processEvents()
+        assert sidebar.is_collapsed()
+        assert window._splitter.sizes()[0] == rail
+        assert sidebar.maximumWidth() == rail
+        assert tree.isVisible()
+        assert tree.isRowHidden(0, parent)
+        btn.click()
+        app.processEvents()
+        assert not sidebar.is_collapsed()
+        assert not tree.isRowHidden(0, parent)
+        assert window._splitter.sizes()[0] >= 200
+        assert sidebar.maximumWidth() > rail
+    finally:
+        window.close()
+        if store is not None:
+            store.close()
+
+
+def test_inspector_hidden_by_default_and_reopens_without_losing_prompt(tmp_path: Path) -> None:
+    try:
+        app = _qapp()
+    except Exception as exc:
+        pytest.skip(f"no display: {exc}")
+
+    from PySide6.QtWidgets import QPlainTextEdit, QToolButton
+
+    window, store, library = _window(tmp_path)
+    try:
+        cid = library.create_conversation().summary.id
+        window._list.refresh(select_id=cid)
+        window.show()
+        app.processEvents()
+        view = window._chat_view
+        inspector = view.inspector()
+        assert not view.inspector_open()
+        assert not inspector.isVisible()
+        assert view._chat_split.sizes()[1] == 0
+        view.set_inspector_open(True)
+        app.processEvents()
+        prompt = inspector.findChild(QPlainTextEdit, "systemPromptEdit")
+        btn = inspector.findChild(QToolButton, "inspectorCollapse")
+        assert prompt is not None and btn is not None
+        assert view.inspector_open()
+        assert prompt.isVisible()
+        expanded_min = inspector.minimumWidth()
+        assert expanded_min >= 280
+        prompt.setPlainText("Keep answers concise.")
+        btn.click()
+        app.processEvents()
+        rail = inspector.tab_width()
+        assert rail < 180
+        assert not view.inspector_open()
+        assert not inspector.isVisible()
+        assert not prompt.isVisible()
+        assert inspector.maximumWidth() == rail
+        sizes = view._chat_split.sizes()
+        assert sizes[1] == 0
+        view.set_inspector_open(True)
+        app.processEvents()
+        assert view.inspector_open()
+        assert prompt.isVisible()
+        assert prompt.toPlainText() == "Keep answers concise."
+        assert inspector.maximumWidth() > rail
+        assert inspector.minimumWidth() == expanded_min
     finally:
         window.close()
         if store is not None:
@@ -393,7 +583,7 @@ def test_new_chat_shortcut_switches_to_chats(tmp_path: Path) -> None:
             store.close()
 
 
-def test_find_and_composer_noop_on_models(tmp_path: Path) -> None:
+def test_find_targets_current_workspace_and_composer_noops_on_models(tmp_path: Path) -> None:
     try:
         _qapp()
     except Exception as exc:
@@ -404,15 +594,16 @@ def test_find_and_composer_noop_on_models(tmp_path: Path) -> None:
         window.show()
         window._sidebar.select_section("models")
         focused: list[str] = []
+        window._models.focus_search = lambda: focused.append("models")
         window._list.focus_search = lambda: focused.append("find")  # type: ignore[method-assign]
         window._chat_view.focus_composer = lambda: focused.append("composer")  # type: ignore[method-assign]
         window._focus_search()
         window._focus_composer()
-        assert focused == []
+        assert focused == ["models"]
         window._sidebar.select_section("chats")
         window._focus_search()
         window._focus_composer()
-        assert focused == ["find", "composer"]
+        assert focused == ["models", "find", "composer"]
     finally:
         window.close()
         if store is not None:
@@ -459,11 +650,13 @@ def test_sidebar_project_folders_hide_templates(tmp_path: Path) -> None:
         tree = window.findChild(QTreeView, "sidebarNav")
         assert tree is not None
         labels = _sidebar_labels(window._sidebar)
-        assert labels == ["Chats", "All", "Ungrouped", "Models"]
+        assert labels == ["Chats", "All conversations", "Ungrouped", "Models", "Second brain"]
         assert "Templates" not in labels
         window._sidebar.new_project(name="Work")
         labels = _sidebar_labels(window._sidebar)
-        assert labels == ["Chats", "All", "Project: Work", "Ungrouped", "Models"]
+        assert labels == [
+            "Chats", "All conversations", "Work", "Ungrouped", "Models", "Second brain"
+        ]
         assert window._sidebar.current_selection().project_id == library.list_projects()[0].id
     finally:
         window.close()
@@ -549,7 +742,7 @@ def test_project_sheet_accept_invalid_and_blank_new_project(
     try:
         assert window._sidebar.new_project(name="   ") is None
         assert library.list_projects() == []
-        assert all("Project:" not in label for label in _sidebar_labels(window._sidebar))
+        assert window._sidebar._project_items == {}
     finally:
         window.close()
         if store is not None:
@@ -669,8 +862,8 @@ def test_move_conversation_and_delete_project_keeps_chats(tmp_path: Path) -> Non
         window._sidebar.select_ungrouped()
         assert _list_titles(window) == ["Moving"]
         labels = _sidebar_labels(window._sidebar)
-        assert "Project: Home" not in labels
-        assert "Project: Work" in labels
+        assert "Home" not in labels
+        assert "Work" in labels
     finally:
         window.close()
         if store is not None:

@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| **Status** | Draft (rev 6) |
+| **Status** | Draft roadmap; workspace UI updated 2026-09-07 |
 | **Author** | Grok (for Seth Hardin) |
 | **Date** | 2026-09-02 |
 | **Revision** | 6 — Seth reversed SwiftUI: one Python codebase, new PySide6 GUI, in-process `llm_engine`, macOS + Windows + Linux |
@@ -12,6 +12,12 @@
 | **Existing data** | `~/.local/share/llm-manager/data.db` — migrate, do not wipe |
 
 This is a new product and a new codebase. It is not a restyle of `chat_page.py`. The legacy trees are a capability inventory and a list of mistakes.
+
+**Workspace update (2026-09-07):** Seth approved a substantial visual and workflow redesign. The implemented UI now uses one combined navigation/conversation sidebar, a centered chat workspace, fully hideable chat settings, and a searchable model library with its own detail surface. K5, K7, Information Architecture, and the visual tokens below describe this revision. Earlier PR titles and roadmap examples remain historical planning context.
+
+**Second brain implementation (2026-09-07):** The sidebar also opens a Markdown vault with a reader/editor, wiki links, backlinks, search, and an interactive graph. `MemoryVault` owns file access, revision checks, and trash; the GUI does not access SQLite. `ChatService.capture_memories` shares the model session with chat and extracts at most six notes with exact conversation evidence, linked source snapshots, and model attribution. A cancellable Qt worker performs capture, and unchanged saved conversations are deduplicated. Optional keyword recall includes at most four non-source notes in chat context and is enabled by default. The vault defaults to `second-brain/` beside the database; vault selection and recall preferences live in `QSettings`. This adds Markdown files without changing the conversation database schema.
+
+**Model recovery update (2026-09-07):** A stuck load must be stoppable without waiting for backend code to cooperate. Production backends now use a disposable spawned process for loading and inference, with private pipes and no database access in the child. Engine services and the GUI remain in the main app. Direct cancellation bypasses the occupied Qt worker; cancellation tokens also cover requests queued before loading starts. Load and first-response waits have 120-second deadlines. Models exposes Cancel loading, and a global Force stop model control remains accessible across workspaces. Ollama load now preloads the model, and unload requests `keep_alive: 0` with a five-second timeout. Failure to confirm external Ollama cleanup is reported explicitly. This supersedes the earlier single-process runtime restriction in K18.
 
 ---
 
@@ -26,7 +32,7 @@ This redesign is **one Python 3.13+ codebase**:
 1. **`llm_engine`** — a library (no PySide6 import) that owns models, backends, SQLite, downloads, ChatService, and the optional OpenAI-compatible HTTP server.
 2. **`llm_manager_app`** — a **new** PySide6 GUI that talks only to those services. It never opens sqlite3 itself, never imports `mlx_lm` / `llama_cpp`, and never starts uvicorn.
 
-Same process. Qt main thread never calls `stream_generate` or `mlx_lm.load`. One generation worker thread plus queued signals.
+GUI and engine services share a process; model loading and inference run in a disposable child process. Qt main thread never calls `stream_generate` or `mlx_lm.load`. One generation worker thread relays results via queued signals.
 
 GUI platforms: **macOS, Windows, Linux.** Backends: Ollama everywhere; GGUF optional extra; MLX optional extra on Darwin/arm64 only.
 
@@ -41,10 +47,10 @@ v1 ships: model list + select, new chat, streaming reply, conversation list with
 | K1 | **Greenfield rebuild** in `/Users/sethhardin/llm-manager-ai`. Do not copy `chat_page.py`, `theme.py`, `native_glass.py`, or the QSS. | Two restyle sessions failed. The foundation is the problem. |
 | K2 | **Option A: new PySide6 GUI + in-process `llm_engine`.** Not SwiftUI. Not a browser/Tauri/Electron shell. Not two GUIs. | Seth requires a GUI on Linux, Windows, and Mac (2026-09-02, reversing the Swift pick). MLX is a Mac-only *backend extra*, not a reason to lock the GUI. |
 | K3 | **Python package is `llm_engine`**, product name is **LLM Manager** for v1. GUI package is `llm_manager_app`. | Marks the break from `llm_manager`. Seth confirmed keep the name. |
-| K4 | **GUI ↔ engine is in-process Python** (typed service methods, not JSON-RPC). Optional OpenAI HTTP is a *separate* loopback listener the engine owns. | One process, one language. `llm-engine serve` is only the OpenAI API, not a GUI control plane. |
-| K5 | **Three-column shell** (QSplitter): sidebar · list · detail. | Notes / Mail pattern. Not a website. Not a settings dump inside the chat page. |
+| K4 | **GUI ↔ engine is in-process Python** (typed service methods, not JSON-RPC). Optional OpenAI HTTP is a *separate* loopback listener the engine owns. | One language; inference is isolated in a disposable worker. `llm-engine serve` is only the OpenAI API, not a GUI control plane. |
+| K5 | **Two-pane shell** (QSplitter): unified sidebar · workspace. Models owns an internal list/detail split. | Give conversations more space; keep projects, search, and recent chats together. |
 | K6 | **Settings as a separate window** (⌘, / Ctrl+,). Per-chat system prompt and sampling live in a chat inspector, not in Settings. | The old app hid Models/Storage/Templates/Server/Appearance behind a “mode” menu on the chat rail. |
-| K7 | **Visual system “Studio”**: system UI font, 8–10px radii, six named colors + selection/separator, no brass, no capsules, no liquid glass. Small Qt token/QSS module — not 742-line `theme.py`. | Distinctive by restraint. One signature: the streaming caret. Qt will not feel like Notes; native widgets + a hard service boundary are the mitigation. |
+| K7 | **Visual system “Studio”**: system UI font, 8px controls, 14px composer, dedicated sidebar surface, palette-aware Qt line icons, and restrained blue accents. | Clear hierarchy, readable contrast in both themes, and a comfortable reading width. |
 | K8 | **`list_conversations()` returns summaries, never messages.** Messages load per conversation. | Old `database.list_conversations()` joins every message of every chat. |
 | K9 | **Explicit `load` / `unload` with a single loaded model cache.** `stream_generate` does not reload weights. | `MLXBackend.stream_chat` calls `mlx_lm.load()` on every send. `GGUFBackend` constructs a new `Llama()` on every send. |
 | K10 | **Backend errors propagate.** Ollama-down is a visible status, not an empty list. | `backends.list_all_models()` swallows all exceptions. |
@@ -55,7 +61,7 @@ v1 ships: model list + select, new chat, streaming reply, conversation list with
 | K15 | **Engine PRs first. Do not start GUI PRs until ChatService (PR 5) exists.** Fallback if the GUI slips: `llm-engine chat` TTY. | Domain logic is independently testable. We do not “just throw a window up.” |
 | K16 | **No dedicated Server page.** OpenAI **endpoint** in PR 6 + Settings → API tab in PR 12b. Templates stay **off the sidebar until PR 14** (not a v1 blocker). | Seth confirmed 2026-09-02. |
 | K17 | **One `QMainWindow`.** PySide6 ≥ 6.7, Qt 6. No Swift `WindowGroup`. | One generation globally. |
-| K18 | **No sidecar.** Quit closes the Qt app, cancels/joins the generation worker, stops uvicorn via `should_exit`. | One process. |
+| K18 | **Disposable model worker process.** Quit cancels model work and terminates its runtime; engine services and the database stay in the main app. | Native model loaders must be stoppable even when blocked or holding the GIL. |
 | K19 | **Engine settings live in `config.json`** (`model_dir`, `api_port`). Host hardcoded `127.0.0.1`. GUI chrome (theme, inspector open, last conversation id, Return-to-send) in `QSettings`. | Model dir and API port are engine state. |
 | K20 | **Service interfaces + pytest are the contract.** No Swift Codable, no JSON-RPC golden fixtures. | `backends/protocol.py` + ChatService / LibraryService / CatalogService signatures. |
 | K21 | **Python is the only inference host.** No mlx-swift. No split backends across languages. | Ollama + HF + FastAPI + the GUI are all Python. |
@@ -223,10 +229,10 @@ Conflicts with “desktop app.” FastAPI stays only as the OpenAI face of the e
 
 ```mermaid
 flowchart LR
-  subgraph proc["One process: uv run llm-manager"]
+  subgraph proc["Main app: uv run llm-manager"]
     subgraph qt["llm_manager_app (PySide6, main thread)"]
       Win["QMainWindow"]
-      Split["QSplitter 3-col"]
+      Split["QSplitter: sidebar + workspace"]
       ChatUI["Chat detail"]
       ModelsUI["Models detail"]
       Settings["Settings window"]
@@ -246,15 +252,21 @@ flowchart LR
       Worker --> Session
       ChatSvc --> Library
       Library --> Store
-      Session --> MLX["MLXBackend\nDarwin/arm64 extra"]
-      Session --> Oll["OllamaBackend"]
-      Session --> GG["GGUFBackend extra"]
+      Session --> Runtime["ProcessBackend"]
       API --> Session
     end
     ChatUI -->|signals/slots| ChatSvc
     ModelsUI --> Catalog
     Settings --> Catalog
   end
+  subgraph model["Disposable model worker"]
+    MLX["MLXBackend\nDarwin/arm64 extra"]
+    Oll["OllamaBackend"]
+    GG["GGUFBackend extra"]
+  end
+  Runtime -->|private pipe| MLX
+  Runtime -->|private pipe| Oll
+  Runtime -->|private pipe| GG
   Store --> DB["data.db"]
   Oll --> Ollama["Ollama 127.0.0.1:11434"]
   MLX --> ModelsDir["~/models/mlx"]
@@ -619,7 +631,7 @@ Retitle **only** when title ∈ `DEFAULT_TITLES` (live row is `"New Chat"`).
 
 **`regenerate`:** params from this call (default Balanced). If last message is assistant, delete it then re-run; if last is user, re-run; if empty, `not_found`. Same lock.
 
-**`stop`:** set Event. After ≥1 chunk: persist partial, `done {cancelled: true, chunks, elapsed, tps}`. Before first chunk: no assistant row, `done {cancelled: true, chunks: 0}`. After **10 s** still generating: inspector offers Unload; if still stuck, Restart is just “unload + error banner” (one process — no sidecar kill).
+**`stop`:** set the operation's cancellation Event directly. After ≥1 chunk: persist partial, `done {cancelled: true, chunks, elapsed, tps}`. Before first chunk: no assistant row, `done {cancelled: true, chunks: 0}`. The runtime's owner polls every 50 ms, terminates its child process, and escalates to kill if termination does not finish within 500 ms. Ollama cleanup additionally requests model unload from its external service. The global Force stop model button and shortcut bypass the occupied Qt worker. Loads and first-response waits time out after 120 seconds.
 
 **`set_model` / `set_system_prompt`:** write through; allowed during generate (next turn).
 
@@ -661,23 +673,22 @@ One `QMainWindow`. Standard titlebar. Title = conversation title or “LLM Manag
 ```mermaid
 flowchart TB
   subgraph window["QMainWindow — QSplitter"]
-    subgraph col1["Column 1 · Sidebar ~200px"]
+    subgraph col1["Unified sidebar · 280px"]
+      N1["New conversation · New project"]
       S1["Chats"]
-      S2["  All"]
-      S3["  Project: …"]
+      S2["  All conversations"]
+      S3["  Projects"]
       S4["  Ungrouped"]
       S5["Models"]
-      S6["Templates  (PR 14)"]
-    end
-    subgraph col2["Column 2 · List ~260px"]
       L1["Search"]
-      L2["+ New Chat"]
       L3["Conversation rows"]
+      S6["Settings"]
     end
-    subgraph col3["Column 3 · Detail"]
-      T1["Toolbar: Model picker · Inspector"]
-      T2["Transcript"]
-      T3["Composer  Return to send"]
+    subgraph col3["Workspace"]
+      T1["Chat title · Model picker · Chat settings"]
+      T2["Centered transcript or conversation starters"]
+      T3["Integrated composer · Keyboard hint"]
+      T4["Optional chat settings panel"]
     end
   end
 ```
@@ -692,9 +703,9 @@ flowchart TB
 | Composer | `QPlainTextEdit`, 40–140px, wrap |
 | Model picker | `QToolButton` + `QMenu` grouped by backend |
 | Settings | separate `QDialog` / `QMainWindow` |
-| Inspector | trailing `QWidget` in the chat splitter |
+| Inspector | trailing `QWidget` in the chat splitter; hidden by default, existing preference preserved |
 
-Selecting Models swaps column 2 to the model list and column 3 to details.
+Selecting Models opens a full library workspace: search and backend-grouped rows on the left; model status, size, backend, metadata, and actions on the right. Clicking a sidebar conversation returns to chat. Find focuses the current workspace's search; in chat it also expands a collapsed sidebar.
 
 **Shortcuts:** ⌘ on macOS, Ctrl on Windows/Linux.
 
@@ -705,11 +716,12 @@ Selecting Models swaps column 2 to the model list and column 3 to details.
 | Ctrl/⌘, | Settings |
 | Ctrl/⌘1 | Chats |
 | Ctrl/⌘2 | Models |
-| Ctrl/⌘3 | Templates (unbound until PR 14) |
+| Ctrl/⌘3 | Second brain |
 | Ctrl/⌘L | Focus composer |
 | Ctrl/⌘F | Focus list search |
 | Return | Send (Shift+Return = newline); Settings can flip to Ctrl/⌘+Return |
-| Escape | Stop generation |
+| Escape | Stop loading, generation, or memory capture |
+| Ctrl/⌘Shift+. | Force stop model |
 | Ctrl/⌘⌫ or Del | Delete conversation |
 
 **New chat:** Ctrl/⌘N. If a project is selected, seed instructions + default model. No scavenger hunt for an empty “New Chat”. Title stays `"New Chat"` until first send.
@@ -730,20 +742,21 @@ Implemented as `llm_manager_app/tokens.py` plus a **small** QSS string (object n
 
 | Token | Hex | Use |
 | --- | --- | --- |
-| `canvas` | `#1C1C1E` | Column 3 |
-| `elevated` | `#2C2C2E` | Composer, inspector, code blocks |
-| `text` | `#F5F5F7` | Primary |
-| `secondary` | `#8E8E93` | Meta |
-| `accent` | `#5B8DEF` | Send, caret, links |
+| `canvas` | `#1B1D22` | Main workspace |
+| `sidebar` | `#15171B` | Navigation and conversations |
+| `elevated` | `#25282F` | Composer, inspector, code blocks |
+| `text` | `#EDEEF2` | Primary |
+| `secondary` | `#9A9FAA` | Meta |
+| `accent` | `#8CA9FF` | Send, caret, links |
 | `danger` | `#FF453A` | Destructive |
-| `selection` | `#5B8DEF` @ 22% | Selected row |
-| `separator` | `#FFFFFF` @ 12% | Hairlines |
+| `selection` | `#8CA9FF` @ 13% | Selected row |
+| `separator` | `#FFFFFF` @ 9% | Hairlines |
 
-**Light:** canvas `#F2F2F7`, elevated `#FFFFFF`, text `#1C1C1E`, secondary `#6C6C70`, accent `#3B6FDB`, danger `#FF3B30`, selection accent @ 18%, separator `#000000` @ 8%.
+**Light:** canvas `#FAFAF8`, sidebar `#EFF0ED`, elevated `#FFFFFF`, text `#252830`, secondary `#666B76`, accent `#4467C4`, danger `#FF3B30`, selection accent @ 9%, separator `#000000` @ 8%.
 
 Type: system UI font (`.AppleSystemUIFont` / Segoe UI / system); SF Mono / Consolas / ui-monospace for metrics. **No serif.** No slogans.
 
-Layout: 8px grid. Default 1280×800, min 1024×680. Radii 8px controls, 10px composer. One round control: send 28px.
+Layout: default 1280×800, min 1024×680. Reading container capped at 840px with adaptive outer space. Radii 8px controls, 14px composer; send button 32px. Primary and secondary text have at least 4.5:1 contrast against the main surfaces in both themes.
 
 **Streaming caret:** 2×14px accent rect at the end of the assistant buffer; pulse unless the OS reduce-motion hint is set. During the turn: plain text. On `done`: markdown via the `markdown` package into `QTextBrowser` (fenced code on `elevated`). Do not rebuild HTML every 80ms. Do not use nested `<table>` bubbles.
 

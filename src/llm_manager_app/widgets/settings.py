@@ -42,11 +42,12 @@ _SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("Ctrl+,", "Settings"),
     ("Ctrl+1", "Chats"),
     ("Ctrl+2", "Models"),
-    ("Ctrl+3", "Templates (unbound)"),
+    ("Ctrl+3", "Second brain"),
+    ("Ctrl+Shift+.", "Force stop model"),
     ("Ctrl+L", "Focus composer"),
     ("Ctrl+F", "Focus list search"),
     ("Return", "Send (Shift+Return = newline); Settings can flip to Ctrl/⌘+Return"),
-    ("Escape", "Stop generation"),
+    ("Escape", "Stop generation, loading, or memory capture"),
     ("Ctrl+Backspace", "Delete conversation"),
     ("Delete", "Delete conversation"),
 )
@@ -148,8 +149,8 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.close)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
         layout.addWidget(tabs, 1)
         layout.addWidget(buttons)
         self.reload()
@@ -178,9 +179,7 @@ class SettingsDialog(QDialog):
 
         self._return_sends = QCheckBox("Return sends", page)
         self._return_sends.setObjectName("returnSendsCheck")
-        self._return_sends.setToolTip(
-            "When off, Ctrl/⌘+Return sends and Return inserts a newline."
-        )
+        self._return_sends.setToolTip("When off, Ctrl/⌘+Return sends and Return inserts a newline.")
         self._return_sends.toggled.connect(self._on_return_sends)
 
         hint = QLabel("When off, Ctrl/⌘+Return sends and Return inserts a newline.", page)

@@ -137,6 +137,34 @@ def test_models_view_does_not_list_on_construct() -> None:
         view.close()
 
 
+def test_model_search_filters_backends_and_clears_hidden_selection() -> None:
+    app = _qapp()
+    catalog = StubCatalog(
+        models=[_model(BackendName.OLLAMA, "qwen"), _model(BackendName.GGUF, "tiny")],
+        availability={"ollama": (True, None), "gguf": (True, None)},
+    )
+    view = _view(catalog)
+    try:
+        view.embed_detail()
+        view.show()
+        _trigger(view.job_finished, view.refresh)
+        view._search.setText("GGUF")
+        assert view.selected_model().ref.name == "tiny"
+        _trigger(view.job_finished, view.refresh)
+        assert view.selected_model().ref.name == "tiny"
+        view._search.setText("no such model")
+        app.processEvents()
+        assert view.selected_model() is None
+        assert view._list_empty.isVisible()
+        assert not view._load_btn.isEnabled()
+        assert not view._chat_btn.isEnabled()
+        view._search.clear()
+        assert view.selected_model().ref.name == "qwen"
+        assert not view._list_empty.isVisible()
+    finally:
+        view.close()
+
+
 def test_models_view_groups_by_backend_and_banners(tmp_path: Path) -> None:
     try:
         _qapp()
@@ -212,14 +240,14 @@ def test_load_unload_run_off_gui_thread() -> None:
         assert catalog.load_calls == [ModelRef(BackendName.OLLAMA, "llama")]
         assert catalog.load_thread is not None
         assert catalog.load_thread is not gui_thread
-        assert "Status: loaded" in body.text()
+        assert "Loaded" in view._model_state.text()
         unload_btn = view.findChild(QPushButton, "unloadButton")
         assert unload_btn is not None
         _trigger(view.job_finished, unload_btn.click)
         assert catalog.unload_calls == 1
         assert catalog.unload_thread is not None
         assert catalog.unload_thread is not gui_thread
-        assert "Status: not loaded" in body.text()
+        assert "Available on this device" in view._model_state.text()
     finally:
         view.close()
 
@@ -238,6 +266,7 @@ def test_generating_surfaces_engine_error() -> None:
         load_error=EngineError("generating", "generation already in progress"),
         generating=True,
     )
+    catalog.loaded = catalog.models[0]
     view = _view(catalog)
     try:
         view.show()
@@ -249,7 +278,7 @@ def test_generating_surfaces_engine_error() -> None:
         assert not unload_btn.isEnabled()
         body = view.findChild(QLabel, "modelsDetailBody")
         assert body is not None
-        assert "Status: generating" in body.text()
+        assert "Generating" in view._model_state.text()
     finally:
         view.close()
 
@@ -331,11 +360,11 @@ def test_main_window_models_section_swaps_panes(tmp_path: Path) -> None:
     )
     window, store, library = _window(tmp_path, BackendRegistry([ollama, mlx]))
     try:
-        assert window._list_stack.currentWidget() is window._list
+        assert window._detail_stack.currentWidget() is window._chat_view
         _trigger(window._models.job_finished, lambda: window._sidebar.select_section(MODELS))
         assert window.windowTitle() == "Models — LLM Manager"
-        assert window._list_stack.currentWidget() is window._models
-        assert window._detail_stack.currentWidget() is window._models.detail
+        assert window._detail_stack.currentWidget() is window._models
+        assert window._models.isAncestorOf(window._models.detail)
         banner = window.findChild(QLabel, "modelsBanner")
         assert banner is not None
         assert "MLX requires" in banner.text()
@@ -346,7 +375,7 @@ def test_main_window_models_section_swaps_panes(tmp_path: Path) -> None:
         assert "llama" in texts
         window._models.chat_with_selected()
         assert window._sidebar.current_section() == "chats"
-        assert window._list_stack.currentWidget() is window._list
+        assert window._detail_stack.currentWidget() is window._chat_view
         cid = window._list.selected_id()
         assert cid is not None
         loaded = library.get_conversation(cid)

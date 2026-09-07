@@ -87,11 +87,15 @@ class ProbeFake(FakeBackend):
 
 def _window(tmp_path: Path, fake: FakeBackend | None = None, settings=None):
     from llm_manager_app.main_window import MainWindow
+    from llm_manager_app.widgets.settings import KEY_INSPECTOR_OPEN
 
     store, library = _library(tmp_path)
     probe = fake if fake is not None else ProbeFake(models=[LOCAL], chunks=("Hello", " world"))
     registry = BackendRegistry([probe])
     gui = settings if settings is not None else _settings(tmp_path)
+    # These tests exercise visible inspector controls; the shell tests cover its closed default.
+    if not gui.contains(KEY_INSPECTOR_OPEN):
+        gui.setValue(KEY_INSPECTOR_OPEN, True)
     window = MainWindow(registry=registry, library=library, settings=gui)
     return window, store, library, probe
 
@@ -100,7 +104,7 @@ def test_studio_qss_covers_inspector_and_settings() -> None:
     from llm_manager_app.tokens import DARK, qss
 
     sheet = qss(DARK)
-    assert len(sheet.splitlines()) < 80
+    assert len(sheet.splitlines()) < 220
     assert "inspector" in sheet
     assert "QDialog" in sheet
 
@@ -584,7 +588,7 @@ def test_unload_during_load_keeps_gui_busy(tmp_path: Path) -> None:
     except Exception as exc:
         pytest.skip(f"no display: {exc}")
 
-    from PySide6.QtWidgets import QPushButton
+    from PySide6.QtWidgets import QPlainTextEdit, QPushButton
 
     gate = threading.Event()
     fake = ProbeFake(models=[LOCAL], chunks=("Hello", " world"), block_load=gate)
@@ -607,7 +611,13 @@ def test_unload_during_load_keeps_gui_busy(tmp_path: Path) -> None:
             app.processEvents()
             time.sleep(0.01)
         assert window._chat_view.is_streaming()
-        assert not window._chat_view.composer().isEnabled()
+        composer = window._chat_view.composer()
+        assert composer.isEnabled()
+        edit = composer.findChild(QPlainTextEdit, "composerEdit")
+        send = composer.findChild(QPushButton, "sendButton")
+        assert edit is not None and not edit.isEnabled()
+        assert send is not None and send.isEnabled()
+        assert send.property("mode") == "stop"
         assert window._chat_service is not None
         with window._chat_service._state_lock:
             assert window._chat_service._generating is True

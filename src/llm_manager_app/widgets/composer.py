@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeyEvent, QResizeEvent, QTextCursor
-from PySide6.QtWidgets import QHBoxLayout, QPlainTextEdit, QPushButton, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
 
 _MIN_H = 40
 _MAX_H = 140
-_SEND_PX = 28
+_SEND_PX = 32
 
 
 class ComposerEdit(QPlainTextEdit):
@@ -44,14 +44,19 @@ class ComposerEdit(QPlainTextEdit):
 
 class Composer(QWidget):
     send_requested = Signal(str)
+    stop_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("composer")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._generating = False
+        self._blocked = False
+        self._send_allowed = True
 
         self._edit = ComposerEdit(self)
         self._edit.setObjectName("composerEdit")
-        self._edit.setPlaceholderText("Message")
+        self._edit.setPlaceholderText("Ask anything, or work through an idea…")
         self._edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._edit.setTabChangesFocus(True)
         self._edit.setFixedHeight(_MIN_H)
@@ -66,14 +71,21 @@ class Composer(QWidget):
         self._send.setCursor(Qt.CursorShape.PointingHandCursor)
         self._send.setDefault(False)
         self._send.setAutoDefault(False)
-        self._send.clicked.connect(self.submit)
-        self._send_allowed = True
+        self._send.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self._send.setAccessibleName("Send message")
+        self._send.clicked.connect(self._on_send_clicked)
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(self._edit, 1)
-        layout.addWidget(self._send, 0, Qt.AlignmentFlag.AlignBottom)
+        self._hint = QLabel("Enter to send · Shift + Enter for a new line", self)
+        self._hint.setObjectName("composerHint")
+        footer = QHBoxLayout()
+        footer.setContentsMargins(8, 0, 4, 0)
+        footer.addWidget(self._hint, 1)
+        footer.addWidget(self._send)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
+        layout.addWidget(self._edit)
+        layout.addLayout(footer)
 
     def text(self) -> str:
         return self._edit.toPlainText()
@@ -94,11 +106,17 @@ class Composer(QWidget):
 
     def set_return_sends(self, enabled: bool) -> None:
         self._edit.set_return_sends(enabled)
+        self._hint.setText(
+            "Enter to send · Shift + Enter for a new line"
+            if enabled else "⌘ / Ctrl + Enter to send · Enter for a new line"
+        )
 
     def return_sends(self) -> bool:
         return self._edit.return_sends()
 
     def submit(self) -> None:
+        if self._generating or self._blocked:
+            return
         if not self.isEnabled() or not self._send.isEnabled():
             return
         text = self._edit.toPlainText()
@@ -108,12 +126,46 @@ class Composer(QWidget):
 
     def set_send_enabled(self, enabled: bool) -> None:
         self._send_allowed = enabled
-        self._send.setEnabled(self.isEnabled() and enabled)
+        self._sync_controls()
+
+    def set_generating(self, generating: bool) -> None:
+        self._generating = generating
+        self._sync_controls()
+
+    def set_blocked(self, blocked: bool) -> None:
+        self._blocked = blocked
+        self._sync_controls()
 
     def setEnabled(self, enabled: bool) -> None:
         super().setEnabled(enabled)
-        self._edit.setEnabled(enabled)
-        self._send.setEnabled(enabled and self._send_allowed)
+        self._sync_controls()
+
+    def _on_send_clicked(self) -> None:
+        if self._generating:
+            self.stop_requested.emit()
+            return
+        self.submit()
+
+    def _sync_controls(self) -> None:
+        enabled = self.isEnabled()
+        self._edit.setEnabled(enabled and not self._generating and not self._blocked)
+        if self._generating:
+            self._send.setText("■")
+            self._send.setToolTip("Stop")
+            self._send.setAccessibleName("Stop generation")
+            self._send.setProperty("mode", "stop")
+            self._send.setEnabled(enabled)
+        else:
+            self._send.setText("↑")
+            self._send.setToolTip("Send")
+            self._send.setAccessibleName("Send message")
+            self._send.setProperty("mode", "send")
+            self._send.setEnabled(enabled and self._send_allowed and not self._blocked)
+        style = self._send.style()
+        if style is not None:
+            style.unpolish(self._send)
+            style.polish(self._send)
+        self._send.update()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)

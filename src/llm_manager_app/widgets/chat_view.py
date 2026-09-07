@@ -1,4 +1,4 @@
-"""Column 3 chat: transcript, composer, inspector, picker, stop, regenerate."""
+"""Chat workspace: transcript, composer, inspector, picker, stop, regenerate."""
 
 from __future__ import annotations
 
@@ -6,16 +6,21 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QLayout,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from llm_engine.domain.models import ChatTurn, Conversation, GenerationParams, LocalModel, ModelRef
+from llm_manager_app.icons import icon
 from llm_manager_app.widgets.composer import Composer
 from llm_manager_app.widgets.inspector import Inspector
+from llm_manager_app.widgets.labels import ElidedLabel
 from llm_manager_app.widgets.model_picker import ModelPicker
 from llm_manager_app.widgets.transcript import Transcript
 
@@ -32,6 +37,8 @@ class ChatView(QWidget):
     model_selected = Signal(object)
     manage_models_requested = Signal()
     catalog_requested = Signal()
+    new_chat_requested = Signal()
+    remember_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -50,10 +57,7 @@ class ChatView(QWidget):
         self._session_busy = False
         self._session_busy_copy = "Model is loading or generating."
 
-        self._empty = QLabel("Select a conversation.", self)
-        self._empty.setObjectName("chatEmpty")
-        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty.setWordWrap(True)
+        self._empty = self._welcome()
 
         self._banner = QLabel(self)
         self._banner.setObjectName("chatBanner")
@@ -66,7 +70,8 @@ class ChatView(QWidget):
         self._picker.manage_models_requested.connect(self.manage_models_requested)
         self._picker.catalog_requested.connect(self.catalog_requested)
 
-        self._inspector_btn = QPushButton("Inspector", self)
+        self._inspector_btn = QPushButton("Chat settings", self)
+        self._inspector_btn.setIcon(icon("settings"))
         self._inspector_btn.setObjectName("inspectorToggle")
         self._inspector_btn.setCheckable(True)
         self._inspector_btn.setChecked(True)
@@ -74,17 +79,35 @@ class ChatView(QWidget):
         self._inspector_btn.toggled.connect(self._on_inspector_toggled)
 
         self._regen = QPushButton("Regenerate", self)
+        self._regen.setIcon(icon("refresh"))
         self._regen.setObjectName("regenerateButton")
         self._regen.setCursor(Qt.CursorShape.PointingHandCursor)
         self._regen.setEnabled(False)
         self._regen.clicked.connect(self.regenerate)
 
-        toolbar = QHBoxLayout()
-        toolbar.setContentsMargins(0, 0, 0, 0)
-        toolbar.addWidget(self._picker, 0)
-        toolbar.addStretch(1)
-        toolbar.addWidget(self._inspector_btn)
-        toolbar.addWidget(self._regen)
+        toolbar = QWidget(self)
+        toolbar.setObjectName("chatToolbar")
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(24, 18, 24, 18)
+        toolbar_layout.setSpacing(8)
+        self._title = ElidedLabel("New conversation", toolbar)
+        self._title.setObjectName("chatTitle")
+        heading = QVBoxLayout()
+        heading.setSpacing(4)
+        heading.addWidget(self._title)
+        heading.addWidget(self._picker, 0, Qt.AlignmentFlag.AlignLeft)
+        toolbar_layout.addLayout(heading, 1)
+        toolbar_layout.addWidget(self._inspector_btn)
+        toolbar_layout.addWidget(self._regen)
+        self._remember = QToolButton(self)
+        self._remember.setObjectName("rememberChatButton")
+        self._remember.setIcon(icon("brain"))
+        self._remember.setToolTip("Remember this conversation in your second brain")
+        self._remember.setAccessibleName("Remember this conversation")
+        self._remember.setAutoRaise(True)
+        self._remember.setEnabled(False)
+        self._remember.clicked.connect(self.remember_requested)
+        toolbar_layout.addWidget(self._remember)
 
         self._transcript = Transcript(self)
         self._model_empty = QLabel(self)
@@ -101,7 +124,13 @@ class ChatView(QWidget):
         empty_pane.setObjectName("modelEmptyPane")
         empty_layout = QVBoxLayout(empty_pane)
         empty_layout.setContentsMargins(16, 16, 16, 16)
+        empty_layout.setSpacing(16)
         empty_layout.addStretch(1)
+        model_title = QLabel("Choose a model to begin", empty_pane)
+        model_title.setObjectName("welcomeTitle")
+        model_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        model_title.setWordWrap(True)
+        empty_layout.addWidget(model_title)
         empty_layout.addWidget(self._model_empty)
         empty_layout.addWidget(self._open_models, 0, Qt.AlignmentFlag.AlignHCenter)
         empty_layout.addStretch(1)
@@ -111,24 +140,45 @@ class ChatView(QWidget):
         self._content.addWidget(empty_pane)
         self._empty_pane = empty_pane
 
+        self._starters = self._welcome(starters=True)
+        self._content.addWidget(self._starters)
+
         self._composer = Composer(self)
         self._composer.send_requested.connect(self._on_send)
+        self._composer.stop_requested.connect(self.stop)
         self._composer.setEnabled(False)
         self._composer.set_send_enabled(False)
 
         body = QWidget(self)
+        body.setObjectName("chatBody")
         body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(8, 8, 8, 8)
-        body_layout.setSpacing(8)
-        body_layout.addWidget(self._banner)
-        body_layout.addLayout(toolbar)
-        body_layout.addWidget(self._content, 1)
-        body_layout.addWidget(self._composer, 0)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+        body_layout.addWidget(toolbar)
+        reading = QWidget(body)
+        reading.setMaximumWidth(840)
+        reading_layout = QVBoxLayout(reading)
+        reading_layout.setContentsMargins(28, 12, 28, 24)
+        reading_layout.setSpacing(16)
+        reading_layout.addWidget(self._banner)
+        reading_layout.addWidget(self._content, 1)
+        reading_layout.addWidget(self._composer)
+        note = QLabel("Conversations stay on this device.", reading)
+        note.setObjectName("composerNote")
+        note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        reading_layout.addWidget(note)
+        reading_row = QHBoxLayout()
+        reading_row.setContentsMargins(0, 0, 0, 0)
+        reading_row.addStretch(1)
+        reading_row.addWidget(reading, 100)
+        reading_row.addStretch(1)
+        body_layout.addLayout(reading_row, 1)
 
         self._inspector = Inspector(self)
         self._inspector.system_prompt_changed.connect(self._on_system_prompt)
         self._inspector.unload_requested.connect(self._on_inspector_unload)
         self._inspector.restart_requested.connect(self._on_inspector_restart)
+        self._inspector.collapse_requested.connect(self._toggle_inspector)
 
         split = QSplitter(Qt.Orientation.Horizontal, self)
         split.setObjectName("chatSplitter")
@@ -138,7 +188,7 @@ class ChatView(QWidget):
         split.addWidget(self._inspector)
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 0)
-        split.setSizes([620, 240])
+        split.setSizes([580, 320])
         self._chat_split = split
 
         self._stack = QStackedWidget(self)
@@ -148,6 +198,85 @@ class ChatView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._stack)
+
+    def _welcome(self, *, starters: bool = False) -> QWidget:
+        pane = QWidget(self)
+        pane.setObjectName("welcomePane")
+        layout = QVBoxLayout(pane)
+        if starters:
+            layout.setContentsMargins(24, 12, 24, 12)
+        else:
+            layout.setContentsMargins(36, 32, 36, 32)
+        layout.setSpacing(12 if starters else 16)
+        layout.addStretch(2)
+        mark = QLabel("✳", pane)
+        mark.setObjectName("welcomeMark")
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(mark)
+        eyebrow = QLabel("YOUR LOCAL WORKSPACE", pane)
+        eyebrow.setObjectName("eyebrow")
+        eyebrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(eyebrow)
+        title = QLabel(
+            "What would you like to work on?" if starters else "Your models. Your workspace.", pane
+        )
+        title.setObjectName("welcomeTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setWordWrap(True)
+        layout.addWidget(title)
+        subtitle = QLabel(
+            "A fresh conversation, with a model you choose."
+            if starters
+            else "Select a conversation, or start something new.\n"
+            "A quiet place to think, write, and build with local AI.",
+            pane,
+        )
+        subtitle.setObjectName("chatEmpty" if not starters else "welcomeSubtitle")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+        layout.addSpacing(4 if starters else 12)
+        if starters:
+            for label, prompt in (
+                ("Explore an idea", "Help me think through an idea: "),
+                ("Write a first draft", "Help me write a first draft of "),
+                ("Work through a problem", "Help me work through this problem: "),
+            ):
+                button = QPushButton(label, pane)
+                button.setObjectName("starterButton")
+                button.setIcon(icon("arrow"))
+                button.setCursor(Qt.CursorShape.PointingHandCursor)
+                button.clicked.connect(lambda _checked=False, text=prompt: self._use_starter(text))
+                layout.addWidget(button)
+        else:
+            actions = QHBoxLayout()
+            actions.addStretch()
+            new = QPushButton("New conversation", pane)
+            new.setObjectName("welcomeNewChat")
+            new.clicked.connect(self.new_chat_requested)
+            models = QPushButton("Browse models", pane)
+            models.clicked.connect(self.manage_models_requested)
+            for button in (new, models):
+                button.setCursor(Qt.CursorShape.PointingHandCursor)
+                actions.addWidget(button)
+            actions.addStretch()
+            layout.addLayout(actions)
+        layout.addStretch(3)
+        if starters:
+            # Keep wrapped headings and starter actions intact in compact layouts.
+            layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+            scroll = QScrollArea(self)
+            scroll.setObjectName("welcomeScroll")
+            scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+            scroll.setWidgetResizable(True)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.setWidget(pane)
+            return scroll
+        return pane
+
+    def _use_starter(self, text: str) -> None:
+        self._composer.set_text(text)
+        self._composer.focus_edit()
 
     def conversation_id(self) -> int | None:
         return self._cid
@@ -173,24 +302,38 @@ class ChatView(QWidget):
         return self._picker
 
     def inspector_open(self) -> bool:
-        return self._inspector.isVisible()
+        return self._inspector.is_expanded()
 
     def set_inspector_open(self, visible: bool) -> None:
         blocked = self._inspector_btn.blockSignals(True)
         self._inspector_btn.setChecked(visible)
         self._inspector_btn.blockSignals(blocked)
+        self._inspector.set_expanded(visible)
         self._inspector.setVisible(visible)
+        rail = self._inspector.tab_width()
+        sizes = self._chat_split.sizes()
+        total = sum(sizes) or 860
         if visible:
-            sizes = self._chat_split.sizes()
-            if len(sizes) == 2 and sizes[1] == 0:
-                total = sum(sizes) or 860
-                self._chat_split.setSizes([max(1, total - 240), 240])
+            width = max(280, rail)
+            if len(sizes) != 2 or sizes[1] < width:
+                self._chat_split.setSizes([max(1, total - width), width])
         else:
-            left = sum(self._chat_split.sizes()) or 1
-            self._chat_split.setSizes([left, 0])
+            self._chat_split.setSizes([total, 0])
+
+    def _toggle_inspector(self) -> None:
+        self.set_inspector_open(not self.inspector_open())
+        self.inspector_open_changed.emit(self.inspector_open())
+
+    def _on_inspector_toggled(self, checked: bool) -> None:
+        self.set_inspector_open(checked)
+        self.inspector_open_changed.emit(checked)
 
     def set_return_sends(self, enabled: bool) -> None:
         self._composer.set_return_sends(enabled)
+
+    def refresh_theme(self) -> None:
+        self._transcript.refresh_theme()
+        self.update()
 
     def generation_params(self) -> GenerationParams:
         return self._inspector.params()
@@ -231,6 +374,7 @@ class ChatView(QWidget):
         self._sync_enabled()
 
     def set_conversation(self, conversation: Conversation | None) -> None:
+        self._title.setText(conversation.summary.title if conversation else "New conversation")
         if conversation is None:
             self._cid = None
             self._model = None
@@ -243,6 +387,7 @@ class ChatView(QWidget):
             self._composer.setEnabled(False)
             self._composer.set_send_enabled(False)
             self._regen.setEnabled(False)
+            self._remember.setEnabled(False)
             self._picker.set_current(None)
             self._picker.setEnabled(False)
             self._inspector.set_conversation(None)
@@ -254,6 +399,9 @@ class ChatView(QWidget):
             self._inspector.flush_prompt()
         self._model = conversation.summary.model
         self._picker.set_current(self._model)
+        self._transcript.set_assistant_label(
+            self._model.name if self._model is not None else "Assistant"
+        )
         self.catalog_requested.emit()
         cid = conversation.summary.id
         if self.is_streaming(cid):
@@ -376,7 +524,6 @@ class ChatView(QWidget):
         elapsed: float,
         tps: float,
     ) -> None:
-        del cancelled
         if conversation_id != self._generating_id:
             return
         self._generating_id = None
@@ -389,6 +536,8 @@ class ChatView(QWidget):
         self._sync_enabled()
         self._composer.focus_edit()
         self.turn_finished.emit(conversation_id)
+        if cancelled and self._cid == conversation_id:
+            self.show_banner("Stopped. Your conversation has been kept.")
 
     def on_error(self, conversation_id: int, code: str, message: str) -> None:
         if conversation_id != self._generating_id:
@@ -429,6 +578,7 @@ class ChatView(QWidget):
             return
         self._model = ref
         self._picker.set_current(ref)
+        self._transcript.set_assistant_label(ref.name)
         self._sync_enabled()
         self.model_selected.emit(ref)
 
@@ -458,10 +608,6 @@ class ChatView(QWidget):
     def _on_system_prompt(self, conversation_id: int, text: str) -> None:
         self.system_prompt_changed.emit(conversation_id, text)
 
-    def _on_inspector_toggled(self, checked: bool) -> None:
-        self.set_inspector_open(checked)
-        self.inspector_open_changed.emit(checked)
-
     def _on_inspector_unload(self) -> None:
         self.stop()
         self.unload_requested.emit()
@@ -475,15 +621,15 @@ class ChatView(QWidget):
     def _sync_enabled(self) -> None:
         has = self._cid is not None
         has_model = has and self._model is not None
-        busy = (
-            self._generating_id is not None
-            or self._pending is not None
-            or self._session_busy
-        )
-        self._picker.setEnabled(has and self._catalog_ready)
-        self._composer.setEnabled(has and not busy)
+        generating = self._generating_id is not None or self._pending is not None
+        busy = generating or self._session_busy
+        self._picker.setEnabled(has and self._catalog_ready and not busy)
+        self._composer.setEnabled(has)
+        self._composer.set_generating(generating)
+        self._composer.set_blocked(self._session_busy and not generating)
         self._composer.set_send_enabled(has_model and not busy)
         self._regen.setEnabled(has_model and bool(self._transcript.turns()) and not busy)
+        self._remember.setEnabled(has_model and bool(self._transcript.turns()) and not busy)
         self._inspector.setEnabled(has)
         self._sync_empty()
 
@@ -496,7 +642,13 @@ class ChatView(QWidget):
             or self.is_streaming()
             or self.keeping_error_buffer(self._cid)
         ):
-            self._content.setCurrentWidget(self._transcript)
+            show_starters = (
+                self._model is not None
+                and not self._transcript.turns()
+                and not self.is_streaming()
+                and not self.keeping_error_buffer(self._cid)
+            )
+            self._content.setCurrentWidget(self._starters if show_starters else self._transcript)
             return
         reason = self._catalog_error or self._picker.unavailable_copy()
         if self._catalog_ready and not self._picker.has_models():

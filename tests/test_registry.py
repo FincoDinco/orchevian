@@ -9,6 +9,7 @@ from llm_engine.backends.fake import FakeBackend
 from llm_engine.backends.gguf import GGUFBackend
 from llm_engine.backends.mlx import MLXBackend
 from llm_engine.backends.ollama import OllamaBackend
+from llm_engine.backends.process import ProcessBackend
 from llm_engine.backends.registry import BackendRegistry, default_backends
 from llm_engine.cli import main
 from llm_engine.config import EngineConfig
@@ -56,9 +57,10 @@ def test_default_registry_includes_ollama_mlx_gguf(monkeypatch: pytest.MonkeyPat
             BackendName.MLX,
             BackendName.GGUF,
         ]
-        assert isinstance(backends[0], OllamaBackend)
-        assert isinstance(backends[1], MLXBackend)
-        assert isinstance(backends[2], GGUFBackend)
+        assert all(isinstance(backend, ProcessBackend) for backend in backends)
+        assert isinstance(backends[0].catalog, OllamaBackend)
+        assert isinstance(backends[1].catalog, MLXBackend)
+        assert isinstance(backends[2].catalog, GGUFBackend)
     finally:
         for backend in backends:
             closer = getattr(backend, "close", None)
@@ -98,10 +100,10 @@ def test_default_backends_uses_config_model_dir(
     cfg = EngineConfig(model_dir=model_dir, api_port=8080)
     backends = default_backends(cfg)
     try:
-        assert isinstance(backends[1], MLXBackend)
-        assert isinstance(backends[2], GGUFBackend)
-        assert backends[1]._model_dir == model_dir / "mlx"
-        assert backends[2]._model_dir == model_dir / "gguf"
+        assert isinstance(backends[1].catalog, MLXBackend)
+        assert isinstance(backends[2].catalog, GGUFBackend)
+        assert backends[1].catalog._model_dir == model_dir / "mlx"
+        assert backends[2].catalog._model_dir == model_dir / "gguf"
     finally:
         for backend in backends:
             closer = getattr(backend, "close", None)
@@ -306,7 +308,7 @@ def test_registry_close_closes_owned_ollama(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.delenv("LLM_ENGINE_FAKE_BACKEND", raising=False)
     registry = BackendRegistry()
     backend = registry.backends()[0]
-    assert isinstance(backend, OllamaBackend)
+    assert isinstance(backend.catalog, OllamaBackend)
     registry.close()
     with pytest.raises(RuntimeError, match="closed"):
         backend.is_available()

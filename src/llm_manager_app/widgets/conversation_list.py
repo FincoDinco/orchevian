@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import EllipsisType
 from typing import Any, Protocol
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QPoint, Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QAbstractListModel, QModelIndex, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -17,15 +18,92 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
 
 from llm_engine.domain.models import Conversation, ConversationSummary, ModelRef, Project
+from llm_manager_app.icons import icon
+from llm_manager_app.tokens import current_palette, qcolor
 
 # Ellipsis = All folders; None = ungrouped.
 _UNFILTERED: EllipsisType = ...
+_ROW_H = 52
+
+
+def relative_stamp(when: datetime, *, now: datetime | None = None) -> str:
+    moment = now or datetime.now()
+    seconds = int((moment - when).total_seconds())
+    if seconds < 45:
+        return "Now"
+    if seconds < 3600:
+        return f"{max(1, seconds // 60)}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    if seconds < 86400 * 7:
+        return f"{seconds // 86400}d"
+    return f"{when.strftime('%b')} {when.day}"
+
+
+def row_meta(summary: ConversationSummary) -> str:
+    stamp = relative_stamp(summary.updated_at)
+    if summary.model is None:
+        return stamp
+    return f"{stamp} · {summary.model.name}"
+
+
+class ConversationDelegate(QStyledItemDelegate):
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        del option, index
+        return QSize(160, _ROW_H)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        palette = current_palette()
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        rect = option.rect.adjusted(4, 1, -4, -1)
+        if selected or hovered:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(qcolor(palette.selection))
+            painter.drawRoundedRect(rect, palette.radius_control, palette.radius_control)
+        title = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        summary = index.data(ConversationListModel.SummaryRole)
+        meta = row_meta(summary) if isinstance(summary, ConversationSummary) else ""
+        title_rect = QRect(rect.x() + 10, rect.y() + 6, rect.width() - 20, 20)
+        meta_rect = QRect(rect.x() + 10, rect.y() + 26, rect.width() - 20, 18)
+        title_font = QFont(option.font)
+        title_font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(title_font)
+        painter.setPen(QColor(palette.text))
+        elided = painter.fontMetrics().elidedText(
+            title, Qt.TextElideMode.ElideRight, title_rect.width()
+        )
+        painter.drawText(
+            title_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine,
+            elided,
+        )
+        meta_font = QFont(option.font)
+        if meta_font.pointSize() > 0:
+            meta_font.setPointSize(max(11, meta_font.pointSize() - 1))
+        painter.setFont(meta_font)
+        painter.setPen(QColor(palette.secondary))
+        elided_meta = painter.fontMetrics().elidedText(
+            meta, Qt.TextElideMode.ElideRight, meta_rect.width()
+        )
+        painter.drawText(
+            meta_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine,
+            elided_meta,
+        )
+        painter.restore()
 
 
 class ConversationStore(Protocol):
@@ -94,6 +172,7 @@ class ConversationListModel(QAbstractListModel):
 class ConversationList(QWidget):
     selected_id_changed = Signal(object)
     chat_created = Signal(int)
+    conversation_activated = Signal()
 
     def __init__(self, parent: QWidget | None = None, *, library: ConversationStore) -> None:
         super().__init__(parent)
@@ -104,26 +183,33 @@ class ConversationList(QWidget):
 
         self._search = QLineEdit(self)
         self._search.setObjectName("conversationSearch")
-        self._search.setPlaceholderText("Search")
+        self._search.setPlaceholderText("Search conversations")
+        self._search.addAction(icon("search"), QLineEdit.ActionPosition.LeadingPosition)
         self._search.setClearButtonEnabled(True)
         self._search.textChanged.connect(self._on_search)
 
-        self._new_btn = QPushButton("New Chat", self)
+        self._new_btn = QPushButton("+ New Chat", self)
         self._new_btn.setObjectName("newChatButton")
         self._new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._new_btn.clicked.connect(lambda: self.new_chat())
 
         self._model = ConversationListModel(self)
         self._view = QListView(self)
         self._view.setObjectName("conversationView")
         self._view.setModel(self._model)
+        self._view.setItemDelegate(ConversationDelegate(self._view))
         self._view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._view.setUniformItemSizes(True)
+        self._view.setSpacing(1)
+        self._view.setMouseTracking(True)
+        self._view.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self._view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._view.customContextMenuRequested.connect(self._on_context_menu)
         self._view.doubleClicked.connect(lambda *_: self.rename_selected())
+        self._view.clicked.connect(lambda *_: self.conversation_activated.emit())
         selection = self._view.selectionModel()
         if selection is not None:
             selection.selectionChanged.connect(lambda *_: self._emit_selection())
@@ -137,6 +223,9 @@ class ConversationList(QWidget):
         self._stack.addWidget(self._view)
         self._stack.addWidget(self._empty)
 
+        self._heading = QLabel("CONVERSATIONS", self)
+        self._heading.setObjectName("eyebrow")
+
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(8)
@@ -144,9 +233,10 @@ class ConversationList(QWidget):
         header.addWidget(self._new_btn, 0)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
         layout.addLayout(header)
+        layout.addWidget(self._heading)
         layout.addWidget(self._stack, 1)
 
         self._shortcut_rename = QShortcut(QKeySequence("F2"), self._view)
@@ -161,6 +251,10 @@ class ConversationList(QWidget):
 
         self.refresh()
 
+    def set_embedded(self) -> None:
+        self._new_btn.hide()
+        self.layout().setContentsMargins(12, 8, 12, 0)
+
     def set_project_filter(
         self,
         project_id: int | None | EllipsisType = _UNFILTERED,
@@ -171,6 +265,7 @@ class ConversationList(QWidget):
             return
         self._project_id = project_id
         self._project_name = project_name
+        self._heading.setText((project_name or "Conversations").upper())
         self.refresh()
 
     def focus_search(self) -> None:
@@ -214,9 +309,7 @@ class ConversationList(QWidget):
         if self._project_id is _UNFILTERED:
             rows = self._library.list_conversations(query=query)
         else:
-            rows = self._library.list_conversations(
-                project_id=self._project_id, query=query
-            )
+            rows = self._library.list_conversations(project_id=self._project_id, query=query)
         self._model.set_rows(rows)
         self._sync_empty(query, rows)
         if keep is not None and self._model.index_for_id(keep).isValid():

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from PySide6.QtCore import Q_ARG, QMetaObject, QObject, Qt, QThread, Signal, Slot
 
 from llm_engine.backends.registry import BackendRegistry
@@ -9,6 +11,7 @@ from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import GenerationParams, ModelRef
 from llm_engine.services.chat import ChatService
 from llm_engine.services.session import ModelSession
+from llm_engine.store.vault import MemoryVault
 
 _BALANCED = GenerationParams.preset("balanced")
 
@@ -31,6 +34,8 @@ class ChatWorker(QObject):
     catalog_loaded = Signal(object)
     catalog_unloaded = Signal()
     catalog_failed = Signal(str, str)
+    memories_created = Signal(object)
+    memories_failed = Signal(str, str)
 
     def __init__(self, chat: ChatService, session: ModelSession | None = None) -> None:
         super().__init__()
@@ -41,19 +46,29 @@ class ChatWorker(QObject):
         chat.on_error = self._on_error
         chat.on_load_progress = self._on_load_progress
 
-    @Slot(int, str, object)
-    def send(self, conversation_id: int, content: str, params: object = None) -> None:
+    @Slot(int, str, object, object)
+    def send(
+        self, conversation_id: int, content: str, params: object = None, cancel: object = None
+    ) -> None:
         try:
-            self._chat.send(conversation_id, content, _params(params))
+            self._chat.send(
+                conversation_id, content, _params(params),
+                cancel=cancel if isinstance(cancel, threading.Event) else None,
+            )
         except EngineError as exc:
             self.rejected.emit(conversation_id, exc.code, str(exc))
             return
         self.accepted.emit(conversation_id, "send")
 
-    @Slot(int, object)
-    def regenerate(self, conversation_id: int, params: object = None) -> None:
+    @Slot(int, object, object)
+    def regenerate(
+        self, conversation_id: int, params: object = None, cancel: object = None
+    ) -> None:
         try:
-            self._chat.regenerate(conversation_id, _params(params))
+            self._chat.regenerate(
+                conversation_id, _params(params),
+                cancel=cancel if isinstance(cancel, threading.Event) else None,
+            )
         except EngineError as exc:
             self.rejected.emit(conversation_id, exc.code, str(exc))
             return
@@ -79,13 +94,15 @@ class ChatWorker(QObject):
         # Load still holds the lock with no handle yet; GUI must stay busy.
         self.unload_failed.emit("generating", "load still in progress")
 
-    @Slot(object)
-    def catalog_load(self, ref: object) -> None:
+    @Slot(object, object)
+    def catalog_load(self, ref: object, cancel: object = None) -> None:
         if not isinstance(ref, ModelRef):
             self.catalog_failed.emit("config_invalid", "invalid model")
             return
         try:
-            loaded = self._chat.catalog_load(ref)
+            loaded = self._chat.catalog_load(
+                ref, cancel=cancel if isinstance(cancel, threading.Event) else None
+            )
         except EngineError as exc:
             self.catalog_failed.emit(exc.code, str(exc))
             return
@@ -105,6 +122,19 @@ class ChatWorker(QObject):
             self.catalog_failed.emit("backend_unavailable", str(exc))
             return
         self.catalog_unloaded.emit()
+
+    @Slot(int, object, object)
+    def remember(self, conversation_id: int, vault: object, cancel: object) -> None:
+        try:
+            if not isinstance(vault, MemoryVault) or not isinstance(cancel, threading.Event):
+                raise EngineError("config_invalid", "Invalid memory request.")
+            result = self._chat.capture_memories(conversation_id, vault, cancel)
+        except EngineError as exc:
+            self.memories_failed.emit(exc.code, str(exc))
+        except Exception as exc:
+            self.memories_failed.emit("memory_failed", str(exc))
+        else:
+            self.memories_created.emit(result)
 
     def _on_token(self, conversation_id: int, text: str) -> None:
         QMetaObject.invokeMethod(

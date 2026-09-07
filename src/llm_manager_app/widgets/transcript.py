@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import html
+import re
 from collections.abc import Sequence
 
 from PySide6.QtCore import QEvent, QObject, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPaintEvent, QTextCursor
 from PySide6.QtWidgets import (
-    QApplication,
     QFrame,
     QPlainTextEdit,
     QStackedWidget,
@@ -18,10 +18,25 @@ from PySide6.QtWidgets import (
 )
 
 from llm_engine.domain.models import ChatTurn
-from llm_manager_app.tokens import DARK, StudioPalette, palette_for_app, system_font_family
+from llm_manager_app.tokens import current_palette, mono_font_family, system_font_family
 
 _CARET_W = 2
 _CARET_H = 14
+
+
+_PRE = re.compile(r"<pre>(.*?)</pre>", re.DOTALL)
+
+
+def _flatten_pre(rendered: str) -> str:
+    # Qt paints each pre line as its own background; one paragraph keeps a single block.
+    def replace(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        inner = re.sub(r"^<code[^>]*>", "", inner)
+        inner = re.sub(r"</code>\s*$", "", inner)
+        inner = inner.strip("\n").replace("\n", "<br>\n")
+        return f'<p class="code">{inner}</p>'
+
+    return _PRE.sub(replace, rendered)
 
 
 def _markdown(text: str) -> str:
@@ -29,7 +44,7 @@ def _markdown(text: str) -> str:
         import markdown
     except ImportError:
         return "<p>" + html.escape(text).replace("\n", "<br>\n") + "</p>"
-    return markdown.markdown(text, extensions=["fenced_code", "nl2br", "sane_lists"])
+    return _flatten_pre(markdown.markdown(text, extensions=["fenced_code", "nl2br", "sane_lists"]))
 
 
 def prefers_reduced_motion() -> bool:
@@ -37,13 +52,6 @@ def prefers_reduced_motion() -> bool:
     if app is None:
         return False
     return app.styleHints().cursorFlashTime() <= 0
-
-
-def _palette() -> StudioPalette:
-    app = QApplication.instance()
-    if isinstance(app, QApplication):
-        return palette_for_app(app)
-    return DARK
 
 
 class StreamCaret(QWidget):
@@ -79,7 +87,7 @@ class StreamCaret(QWidget):
     def paintEvent(self, event: QPaintEvent) -> None:
         del event
         painter = QPainter(self)
-        color = QColor(_palette().accent)
+        color = QColor(current_palette().accent)
         if not self._bright:
             color.setAlpha(90)
         painter.fillRect(self.rect(), color)
@@ -93,11 +101,13 @@ class Transcript(QWidget):
         self._buffer = ""
         self._streaming = False
         self._plain_locked = False
+        self._assistant_label = "Assistant"
 
         self._browser = QTextBrowser(self)
         self._browser.setObjectName("transcriptHistory")
         self._browser.setOpenExternalLinks(True)
         self._browser.setFrameShape(QFrame.Shape.NoFrame)
+        self._browser.document().setDocumentMargin(12)
 
         self._plain = QPlainTextEdit(self)
         self._plain.setObjectName("transcriptStream")
@@ -105,6 +115,7 @@ class Transcript(QWidget):
         self._plain.setUndoRedoEnabled(False)
         self._plain.setFrameShape(QFrame.Shape.NoFrame)
         self._plain.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._plain.document().setDocumentMargin(12)
         self._plain.updateRequest.connect(self._on_plain_update)
 
         self._caret = StreamCaret(self._plain.viewport())
@@ -136,6 +147,14 @@ class Transcript(QWidget):
 
     def is_plain(self) -> bool:
         return self._stack.currentWidget() is self._plain
+
+    def set_assistant_label(self, label: str) -> None:
+        self._assistant_label = label.strip() or "Assistant"
+
+    def refresh_theme(self) -> None:
+        if self.is_plain():
+            return
+        self._render_html()
 
     def set_turns(self, turns: Sequence[ChatTurn]) -> None:
         self._turns = list(turns)
@@ -218,10 +237,17 @@ class Transcript(QWidget):
     def keep_stream(self) -> None:
         self.finish_stream(parse_markdown=False)
 
+    def _role_label(self, role: str) -> str:
+        if role == "user":
+            return "You"
+        if role == "assistant":
+            return self._assistant_label
+        return role.title()
+
     def _dump_plain(self, *, with_buffer: bool) -> str:
-        blocks = [turn.content for turn in self._turns]
+        blocks = [f"{self._role_label(turn.role)}\n{turn.content}" for turn in self._turns]
         if with_buffer:
-            blocks.append(self._buffer)
+            blocks.append(f"{self._assistant_label}\n{self._buffer}")
         return "\n\n".join(blocks)
 
     def _on_plain_update(self, _rect: QRect, _dy: int) -> None:
@@ -253,28 +279,32 @@ class Transcript(QWidget):
         bar.setValue(bar.maximum())
 
     def _render_html(self) -> None:
-        palette = _palette()
+        palette = current_palette()
         family = system_font_family()
+        mono = mono_font_family()
         parts = [
             "<html><head><style>",
             f"body {{ color: {palette.text}; background-color: {palette.canvas}; "
-            f'font-family: "{family}"; }}',
-            f"pre, code {{ background-color: {palette.elevated}; "
-            f"border-radius: {palette.radius_control}px; }}",
-            "pre { padding: 8px; }",
+            f'font-family: "{family}"; font-size: 14px; line-height: 1.45; }}',
+            f'code, p.code {{ font-family: "{mono}"; background-color: {palette.elevated}; }}',
+            "p.code { padding: 10px 12px; margin: 8px 0; }",
+            "p.code code { background-color: transparent; }",
+            "p { margin: 0 0 8px 0; }",
             f"a {{ color: {palette.accent}; }}",
-            f".role {{ color: {palette.secondary}; }}",
-            ".turn { margin: 0 0 16px 0; }",
+            f".role {{ color: {palette.secondary}; font-size: 12px; font-weight: 600; "
+            "margin: 24px 0 10px 0; }",
+            ".turn { margin: 0 0 20px 0; }",
             "</style></head><body>",
         ]
         for turn in self._turns:
-            role = html.escape(turn.role)
+            role_class = html.escape(turn.role)
+            label = html.escape(self._role_label(turn.role))
             if turn.role == "assistant":
                 body = _markdown(turn.content)
             else:
                 body = "<p>" + html.escape(turn.content).replace("\n", "<br>\n") + "</p>"
             parts.append(
-                f'<div class="turn {role}"><div class="role">{role}</div>{body}</div>'
+                f'<div class="turn {role_class}"><p class="role">{label}</p>{body}</div>'
             )
         parts.append("</body></html>")
         self._browser.setHtml("".join(parts))

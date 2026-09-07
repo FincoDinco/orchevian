@@ -154,10 +154,40 @@ class OllamaBackend:
         return models
 
     def load(self, model: LocalModel, options: LoadOptions | None = None) -> ModelHandle:
-        return ModelHandle(model=model, options=options or LoadOptions())
+        options = options or LoadOptions()
+        self._model_request(
+            {"model": model.ref.name, "stream": False, "options": {"num_ctx": options.n_ctx}},
+            timeout=120.0,
+        )
+        return ModelHandle(model=model, options=options)
 
-    def unload(self, _handle: LoadedHandle) -> None:
-        return
+    def unload(self, handle: LoadedHandle) -> None:
+        self.release_model(handle.model)
+
+    def release_model(self, model: LocalModel) -> None:
+        try:
+            self._model_request(
+                {"model": model.ref.name, "keep_alive": 0, "stream": False}, timeout=5.0
+            )
+        except EngineError as exc:
+            raise EngineError(
+                "stop_failed",
+                "The request was stopped, but Ollama did not confirm unloading the model. "
+                f"Try `ollama stop {model.ref.name}` or restart Ollama if it is unresponsive.",
+            ) from exc
+
+    def _model_request(self, payload: dict[str, Any], *, timeout: float) -> None:
+        try:
+            response = self._client.post("/api/generate", json=payload, timeout=timeout)
+            if response.status_code != 200:
+                raise EngineError(
+                    "load_failed", response.text or f"Ollama HTTP {response.status_code}"
+                )
+            data = response.json()
+            if not isinstance(data, dict) or data.get("error") or data.get("done") is not True:
+                raise EngineError("load_failed", "Ollama did not confirm the model operation.")
+        except (httpx.RequestError, ValueError) as exc:
+            raise EngineError("backend_unavailable", f"Ollama request failed: {exc}") from exc
 
     def stream_generate(
         self,

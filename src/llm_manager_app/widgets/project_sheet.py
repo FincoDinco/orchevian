@@ -54,9 +54,10 @@ class ProjectSheet(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
+        self.resize(420, 280)
         form = QFormLayout(self)
-        form.setContentsMargins(12, 12, 12, 12)
-        form.setSpacing(8)
+        form.setContentsMargins(16, 16, 16, 16)
+        form.setSpacing(10)
         form.addRow("Name", self._name)
         form.addRow("Instructions", self._instructions)
         form.addRow("Default model", self._model)

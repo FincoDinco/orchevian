@@ -7,16 +7,23 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QDoubleSpinBox,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from llm_engine.domain.models import Conversation, GenerationParams
+from llm_manager_app.tokens import named_tab_width
+
+_TAB_NAME = "Inspector"
+_EXPANDED_MIN = 280
 
 _PRESETS = ("precise", "balanced", "creative")
 _UNLOAD_OFFER_MS = 10_000
@@ -33,6 +40,7 @@ class Inspector(QWidget):
     system_prompt_changed = Signal(int, str)
     unload_requested = Signal()
     restart_requested = Signal()
+    collapse_requested = Signal()
 
     def __init__(
         self,
@@ -42,6 +50,7 @@ class Inspector(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("inspector")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._cid: int | None = None
         self._saved_prompt = ""
         self._unload_offer_ms = max(0, int(unload_offer_ms))
@@ -49,6 +58,7 @@ class Inspector(QWidget):
         self._unload_offered = False
 
         prompt_label = QLabel("System prompt", self)
+        prompt_label.setObjectName("inspectorSection")
         self._prompt = QPlainTextEdit(self)
         self._prompt.setObjectName("systemPromptEdit")
         self._prompt.setPlaceholderText("Instructions for this conversation")
@@ -61,22 +71,24 @@ class Inspector(QWidget):
         self._prompt_timer.setInterval(250)
         self._prompt_timer.timeout.connect(self._emit_prompt)
 
-        preset_row = QHBoxLayout()
+        generation_label = QLabel("Generation", self)
+        generation_label.setObjectName("inspectorSection")
+        preset_row = QGridLayout()
         preset_row.setContentsMargins(0, 0, 0, 0)
         preset_row.setSpacing(4)
         self._preset_group = QButtonGroup(self)
         self._preset_group.setExclusive(True)
         self._preset_buttons: dict[str, QPushButton] = {}
-        for name in _PRESETS:
+        for column, name in enumerate(_PRESETS):
             btn = QPushButton(name.title(), self)
             btn.setObjectName(f"preset{name.title()}")
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self._preset_group.addButton(btn)
             self._preset_buttons[name] = btn
-            preset_row.addWidget(btn)
+            preset_row.addWidget(btn, 0, column)
             btn.clicked.connect(lambda _checked=False, key=name: self._apply_preset(key))
-        preset_row.addStretch(1)
 
         self._temperature = QDoubleSpinBox(self)
         self._temperature.setObjectName("temperatureSpin")
@@ -128,20 +140,111 @@ class Inspector(QWidget):
         self._offer_timer.setSingleShot(True)
         self._offer_timer.timeout.connect(self._on_offer_timeout)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
-        layout.addWidget(prompt_label)
-        layout.addWidget(self._prompt)
-        layout.addLayout(preset_row)
-        layout.addLayout(sampling)
-        layout.addWidget(QLabel("Last turn", self))
-        layout.addWidget(self._last_turn)
-        layout.addLayout(stuck)
-        layout.addStretch(1)
+        last_label = QLabel("Last turn", self)
+        last_label.setObjectName("inspectorSection")
 
+        self._title = QPushButton("Chat settings", self)
+        self._title.setObjectName("inspectorTab")
+        self._title.setCheckable(True)
+        self._title.setChecked(True)
+        self._title.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._title.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self._title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._title.setFixedHeight(self._title.fontMetrics().height() + 12)
+        self._title.clicked.connect(lambda *_: self.collapse_requested.emit())
+
+        self._collapse_btn = QToolButton(self)
+        self._collapse_btn.setObjectName("inspectorCollapse")
+        self._collapse_btn.setAutoRaise(True)
+        self._collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._collapse_btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self._collapse_btn.clicked.connect(lambda *_: self.collapse_requested.emit())
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(0)
+        header.addWidget(self._title, 1)
+        header.addWidget(self._collapse_btn, 0)
+
+        self._body = QWidget(self)
+        self._body.setObjectName("inspectorBody")
+        body_layout = QVBoxLayout(self._body)
+        body_layout.setContentsMargins(0, 8, 0, 0)
+        body_layout.setSpacing(14)
+        body_layout.addWidget(prompt_label)
+        body_layout.addWidget(self._prompt)
+        body_layout.addWidget(generation_label)
+        body_layout.addLayout(preset_row)
+        body_layout.addLayout(sampling)
+        body_layout.addWidget(last_label)
+        body_layout.addWidget(self._last_turn)
+        body_layout.addLayout(stuck)
+        body_layout.addStretch(1)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(0)
+        layout.addLayout(header)
+        layout.addWidget(self._body, 1)
+        layout.addStretch(0)
+        self._layout = layout
+
+        self._expanded = True
         self._set_params(GenerationParams.preset("balanced"))
         self.setEnabled(False)
+        self._apply_expanded()
+
+    def tab_width(self) -> int:
+        layout = self.layout()
+        margins = 24
+        if layout is not None:
+            box = layout.contentsMargins()
+            margins = box.left() + box.right()
+        return named_tab_width(self, (_TAB_NAME,), extra=margins + 28)
+
+    def is_expanded(self) -> bool:
+        return self._expanded
+
+    def set_expanded(self, expanded: bool) -> None:
+        expanded = bool(expanded)
+        if expanded == self._expanded:
+            self._apply_expanded()
+            return
+        self._expanded = expanded
+        self._apply_expanded()
+
+    def setEnabled(self, enabled: bool) -> None:
+        self._body.setEnabled(enabled)
+
+    def _apply_expanded(self) -> None:
+        self._body.setVisible(self._expanded)
+        blocked = self._title.blockSignals(True)
+        self._title.setChecked(self._expanded)
+        self._title.blockSignals(blocked)
+        # Expanded: toolbar owns the name. Collapsed: this button is the named tab.
+        self._title.setVisible(True)
+        self._collapse_btn.setVisible(self._expanded)
+        if self._expanded:
+            self._layout.setContentsMargins(12, 10, 12, 12)
+            self._layout.setStretch(1, 1)
+            self._layout.setStretch(2, 0)
+        else:
+            self._layout.setContentsMargins(8, 8, 8, 8)
+            self._layout.setStretch(1, 0)
+            self._layout.setStretch(2, 1)
+        rail = self.tab_width()
+        if self._expanded:
+            self.setMinimumWidth(max(_EXPANDED_MIN, rail))
+            self.setMaximumWidth(16777215)
+            self._collapse_btn.setArrowType(Qt.ArrowType.RightArrow)
+            self._collapse_btn.setToolTip("Collapse inspector")
+            self._title.setToolTip("Collapse inspector")
+        else:
+            self.setMinimumWidth(rail)
+            self.setMaximumWidth(rail)
+            self._collapse_btn.setArrowType(Qt.ArrowType.LeftArrow)
+            self._collapse_btn.setToolTip("Expand inspector")
+            self._title.setToolTip("Inspector")
 
     def set_unload_offer_ms(self, ms: int) -> None:
         self._unload_offer_ms = max(0, int(ms))
