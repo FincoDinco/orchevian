@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
+from dataclasses import replace
 from functools import partial
 
 from llm_engine import config
@@ -56,11 +57,19 @@ class BackendRegistry:
         availability: dict[str, tuple[bool, str | None]] = {}
         for backend in self._backends:
             key = str(backend.name)
-            ok, reason = backend.is_available()
-            availability[key] = (ok, reason)
-            if not ok:
-                continue
-            models.extend(backend.list_models())
+            try:
+                ok, reason = backend.is_available()
+                availability[key] = (ok, reason)
+                if not ok and not getattr(backend, "supports_offline_catalog", False):
+                    continue
+                rows = backend.list_models()
+                models.extend(
+                    rows if ok else [
+                        replace(model, available=False, unavailable_reason=reason) for model in rows
+                    ]
+                )
+            except (EngineError, OSError) as exc:
+                availability[key] = (False, str(exc))
         return models, availability
 
     def close(self) -> None:

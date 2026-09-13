@@ -11,15 +11,21 @@ from llm_engine.domain.errors import EngineError
 
 API_HOST = "127.0.0.1"
 DEFAULT_API_PORT = 8080
-ENV_DB = "LLM_ENGINE_DB"
-ENV_CONFIG = "LLM_ENGINE_CONFIG"
+ENV_DB = "ORCHEVIAN_DB"
+ENV_CONFIG = "ORCHEVIAN_CONFIG"
+LEGACY_ENV_DB = "LLM_ENGINE_DB"
+LEGACY_ENV_CONFIG = "LLM_ENGINE_CONFIG"
 
 _WRITABLE_FIELDS = frozenset({"model_dir", "api_port"})
 
 
 def app_data_dir() -> Path:
-    # Same XDG-style path on every OS; do not use APPDATA.
-    return Path.home() / ".local" / "share" / "llm-manager"
+    # Reuse established storage in place; never fork an existing user's library.
+    share = Path.home() / ".local" / "share"
+    legacy = share / "llm-manager"
+    if legacy.exists():
+        return legacy
+    return share / "orchevian"
 
 
 def default_db_path() -> Path:
@@ -41,7 +47,7 @@ def default_model_dir() -> Path:
 def resolve_db_path(override: str | Path | None = None) -> Path:
     if override is not None:
         return Path(override).expanduser()
-    env = os.environ.get(ENV_DB)
+    env = os.environ.get(ENV_DB) or os.environ.get(LEGACY_ENV_DB)
     if env:
         return Path(env).expanduser()
     return default_db_path()
@@ -50,7 +56,7 @@ def resolve_db_path(override: str | Path | None = None) -> Path:
 def resolve_config_path(override: str | Path | None = None) -> Path:
     if override is not None:
         return Path(override).expanduser()
-    env = os.environ.get(ENV_CONFIG)
+    env = os.environ.get(ENV_CONFIG) or os.environ.get(LEGACY_ENV_CONFIG)
     if env:
         return Path(env).expanduser()
     return default_config_path()

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QSettings, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -13,8 +14,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QToolBar,
+    QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -28,13 +33,20 @@ from llm_engine.services.memory import CaptureResult
 from llm_engine.services.session import ModelSession
 from llm_engine.store.library import LibraryService
 from llm_engine.store.vault import MemoryVault
+from llm_manager_app.icons import icon
+from llm_manager_app.model_names import ModelNames
+from llm_manager_app.model_preferences import default_model
 from llm_manager_app.tokens import apply_studio
 from llm_manager_app.widgets.chat_view import ChatView
 from llm_manager_app.widgets.conversation_list import ConversationList, ConversationStore
+from llm_manager_app.widgets.downloads_view import DownloadsPopover
 from llm_manager_app.widgets.memory_view import MemoryView
 from llm_manager_app.widgets.models_view import ModelsView
+from llm_manager_app.widgets.project_home import ProjectHome
+from llm_manager_app.widgets.project_sheet import ProjectSheet
 from llm_manager_app.widgets.settings import (
     APP_NAME,
+    KEY_AUTO_MEMORY,
     KEY_INSPECTOR_OPEN,
     KEY_LAST_CONVERSATION_ID,
     KEY_RETURN_SENDS,
@@ -50,9 +62,10 @@ from llm_manager_app.widgets.sidebar import (
     CHATS,
     FOLDER_ALL,
     FOLDER_PROJECT,
-    FOLDER_UNGROUPED,
     MEMORY,
     MODELS,
+    PRIVATE,
+    SETTINGS,
     Sidebar,
     SidebarSelection,
 )
@@ -63,7 +76,7 @@ from llm_manager_app.workers import (
     start_chat_worker,
 )
 
-_TITLE = "LLM Manager"
+_TITLE = APP_NAME
 
 
 def _default_library() -> tuple[ConversationStore, object]:
@@ -92,10 +105,12 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(_TITLE)
+        # Keep the native titlebar and resize frame available on every platform.
         self.setMinimumSize(1024, 680)
         self.resize(1280, 800)
 
         self._settings = settings if settings is not None else make_settings()
+        self._model_names = ModelNames(self._settings, self)
         qt_app = QApplication.instance()
         if isinstance(qt_app, QApplication):
             if not qt_app.organizationName():
@@ -113,7 +128,18 @@ class MainWindow(QMainWindow):
         if library is None:
             library, self._store = _default_library()
         self._library = library
+        self._library.default_model = default_model(self._settings)
+        self._catalog_models = []
+        self._catalog_availability = {}
+        self._catalog_ready = False
+        self._project_form = None
+        self._project_return = None
         self._closing = False
+        self._private_id: int | None = None
+        self._private_return_draft = ""
+        self._private_return_inspector = False
+        self._pending_memories: set[int] = set()
+        self._automatic_capture = False
         self._memory_busy = False
         self._memory_cancel = threading.Event()
         self._model_load_cancel = threading.Event()
@@ -147,45 +173,74 @@ class MainWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(1)
 
-        self._sidebar = Sidebar(splitter, library=self._library)
+        self._sidebar = Sidebar(splitter, library=self._library, names=self._model_names)
         self._sidebar.section_changed.connect(self._on_section)
         self._sidebar.filter_changed.connect(self._on_filter)
         self._sidebar.collapsed_changed.connect(self._on_sidebar_collapsed)
 
-        self._list = ConversationList(self._sidebar, library=self._library)
+        self._list = ConversationList(
+            self._sidebar, library=self._library, names=self._model_names,
+        )
         self._list.set_embedded()
         self._sidebar.attach_conversations(self._list)
         self._sidebar.new_chat_requested.connect(lambda: self._list.new_chat())
         self._sidebar.settings_requested.connect(self._open_settings)
+        self._sidebar.search_requested.connect(self._focus_search)
+        self._sidebar.catalog_requested.connect(
+            self._catalog.list_models, Qt.ConnectionType.QueuedConnection
+        )
         self._list.selected_id_changed.connect(self._on_selected)
-        self._list.conversation_activated.connect(lambda: self._sidebar.select_section(CHATS))
+        self._list.conversation_activated.connect(self._show_selected_chat)
         self._list.chat_created.connect(self._on_chat_created)
-        self._models = ModelsView(catalog=self._catalog_service, external_jobs=True)
+        self._models = ModelsView(
+            catalog=self._catalog_service, external_jobs=True, names=self._model_names,
+        )
+        self._sidebar.project_setup_requested.connect(self._create_project)
+        self._models.return_to_project.clicked.connect(self._return_to_project)
         self._models.chat_requested.connect(self._on_chat_with_model)
         self._models.refresh_requested.connect(
             self._catalog.list_models, Qt.ConnectionType.QueuedConnection
         )
 
-        self._detail_stack = QStackedWidget(splitter)
+        self._workspace = QWidget(splitter)
+        self._workspace_layout = QVBoxLayout(self._workspace)
+        self._workspace_layout.setContentsMargins(0, 0, 0, 0)
+        self._workspace_layout.setSpacing(0)
+        self._detail_stack = QStackedWidget(self._workspace)
+        self._workspace_layout.addWidget(self._detail_stack, 1)
         self._detail_stack.setObjectName("detailPane")
-        self._chat_view = ChatView(self._detail_stack)
+        self._chat_view = ChatView(self._detail_stack, names=self._model_names)
         self._chat_view.new_chat_requested.connect(lambda: self._list.new_chat())
         self._chat_view.stop_requested.connect(self._on_stop)
         self._chat_view.turn_finished.connect(self._on_turn_finished)
+        self._chat_view.end_private_requested.connect(self._clear_private)
         self._chat_view.system_prompt_changed.connect(self._on_system_prompt)
         self._chat_view.inspector_open_changed.connect(self._on_inspector_open)
         self._chat_view.model_selected.connect(self._on_model_selected)
-        self._chat_view.manage_models_requested.connect(
-            lambda: self._sidebar.select_section(MODELS)
-        )
+        self._chat_view.manage_models_requested.connect(self._manage_chat_models)
         self._chat_view.catalog_requested.connect(
             self._catalog.list_models, Qt.ConnectionType.QueuedConnection
         )
         self._catalog.listed.connect(self._on_catalog_listed)
         self._catalog.failed.connect(self._on_catalog_failed)
         self._detail_stack.addWidget(self._chat_view)
+        self._project_home = ProjectHome(
+            self._detail_stack, library=self._library, names=self._model_names,
+        )
+        self._detail_stack.addWidget(self._project_home)
+        self._project_home.start_requested.connect(self._start_project_chat)
+        self._project_home.conversation_requested.connect(self._open_project_chat)
+        self._project_home.browse_requested.connect(self._browse_project_models)
+        self._project_home.project_saved.connect(
+            lambda pid: self._sidebar.refresh(select_project_id=pid)
+        )
         self._models.embed_detail()
         self._detail_stack.addWidget(self._models)
+        self._downloads_popover = DownloadsPopover(self._models.download_view, self)
+        self._models.downloads_requested.connect(self._show_downloads)
+        self._models.download_activity_changed.connect(self._sync_download_button)
+        self._models.download_view.browse_requested.connect(self._browse_models)
+        self._models.download_view.open_model.connect(self._open_downloaded_model)
         self._memory = MemoryView(self._memory_vault, self._detail_stack)
         self._detail_stack.addWidget(self._memory)
         self._memory.remember_requested.connect(self._remember_conversation)
@@ -218,6 +273,10 @@ class MainWindow(QMainWindow):
             self._models.unload_requested.connect(
                 self._worker.catalog_unload, Qt.ConnectionType.QueuedConnection
             )
+            self._models.delete_requested.connect(self._on_models_unload)
+            self._models.delete_requested.connect(
+                self._worker.catalog_delete, Qt.ConnectionType.QueuedConnection
+            )
             self._worker.accepted.connect(self._chat_view.on_accepted)
             self._worker.accepted.connect(self._on_chat_accepted)
             self._worker.accepted.connect(self._on_chat_busy_started)
@@ -226,6 +285,7 @@ class MainWindow(QMainWindow):
             self._worker.token.connect(self._chat_view.on_token)
             self._worker.done.connect(self._chat_view.on_done)
             self._worker.done.connect(self._on_chat_busy_ended)
+            self._worker.done.connect(self._schedule_automatic_memory)
             self._worker.error.connect(self._chat_view.on_error)
             self._worker.error.connect(self._on_chat_busy_ended)
             self._worker.unloaded.connect(self._chat_view.on_unloaded)
@@ -233,10 +293,11 @@ class MainWindow(QMainWindow):
             self._worker.unload_failed.connect(self._chat_view.on_unload_failed)
             self._worker.catalog_loaded.connect(self._on_catalog_model_loaded)
             self._worker.catalog_unloaded.connect(self._on_catalog_model_unloaded)
+            self._worker.catalog_deleted.connect(self._on_catalog_model_deleted)
             self._worker.catalog_failed.connect(self._on_catalog_model_failed)
 
         splitter.addWidget(self._sidebar)
-        splitter.addWidget(self._detail_stack)
+        splitter.addWidget(self._workspace)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([280, 1000])
@@ -258,15 +319,21 @@ class MainWindow(QMainWindow):
         self._model_status_timer.timeout.connect(self._sync_model_activity)
         self._model_status_timer.start()
 
+        self._auto_memory_timer = QTimer(self)
+        self._auto_memory_timer.setInterval(1500)
+        self._auto_memory_timer.timeout.connect(self._drain_automatic_memories)
+        self._auto_memory_timer.start()
         self._settings_dialog: SettingsDialog | None = None
         self._shortcuts_dialog: ShortcutsDialog | None = None
         self._build_menus()
+        self._build_toolbar()
 
         # Escape is a QShortcut so dialogs can still consume it; other keys are QActions.
         self._shortcut_stop = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         self._shortcut_stop.activated.connect(self._stop_current)
 
         self._restore_chrome()
+        self._project_home.composer.set_return_sends(self._chat_view.composer().return_sends())
         last = as_int(self._settings.value(KEY_LAST_CONVERSATION_ID))
         self._list.refresh(select_id=last)
         self._on_selected(self._list.selected_id())
@@ -276,6 +343,10 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._closing = True
+        self._auto_memory_timer.stop()
+        self._pending_memories.clear()
+        self._leave_private()
+        self._downloads_popover.hide()
         self._model_status_timer.stop()
         self._model_load_cancel.set()
         self._chat_cancel.set()
@@ -311,6 +382,7 @@ class MainWindow(QMainWindow):
                 self._worker.unload_failed,
                 self._worker.catalog_loaded,
                 self._worker.catalog_unloaded,
+                self._worker.catalog_deleted,
                 self._worker.catalog_failed,
                 self._worker.memories_created,
                 self._worker.memories_failed,
@@ -352,6 +424,8 @@ class MainWindow(QMainWindow):
             lingering = self._models.take_running_thread(QApplication.instance())
             if lingering is not None:
                 self._linger(lingering)
+            for thread in self._models.downloads.take_running_threads(QApplication.instance()):
+                self._linger(thread)
         if (
             self._owns_registry
             and chat_done
@@ -384,6 +458,62 @@ class MainWindow(QMainWindow):
             self._registry.close()
             self._owns_registry = False
 
+    def _build_toolbar(self) -> None:
+        toolbar = QToolBar("Workspace", self._workspace)
+        toolbar.setObjectName("workspaceToolbar")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        toolbar.setIconSize(QSize(20, 20))
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._workspace_layout.insertWidget(0, toolbar)
+        self._workspace_toolbar = toolbar
+        spacer = QWidget(toolbar)
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        self._private_button = QToolButton(toolbar)
+        self._private_button.setObjectName("privateChatButton")
+        self._private_button.setText("Private Chat")
+        self._private_button.setIcon(icon("lock"))
+        self._private_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._private_button.setToolTip("Open Private Chat — no saved history or memories")
+        self._private_button.setAccessibleName("Open Private Chat")
+        self._private_button.clicked.connect(lambda: self._sidebar.select_section(PRIVATE))
+        toolbar.addWidget(self._private_button)
+        self._download_button = QToolButton(toolbar)
+        self._download_button.setObjectName("downloadsButton")
+        self._download_button.setIcon(icon("download"))
+        self._download_button.setIconSize(QSize(20, 20))
+        self._download_button.setAutoRaise(True)
+        self._download_button.setCheckable(True)
+        self._download_button.clicked.connect(self._toggle_downloads)
+        toolbar.addWidget(self._download_button)
+        self._downloads_popover.dismissed.connect(lambda: self._download_button.setChecked(False))
+        self._sync_download_button(self._models.downloads.active_count)
+
+    def _sync_download_button(self, count: int) -> None:
+        if not hasattr(self, "_download_button"):
+            return
+        self._download_button.setText(str(count) if count else "Downloads")
+        self._download_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon if count
+            else Qt.ToolButtonStyle.ToolButtonIconOnly
+        )
+        label = f"Downloads, {count} active" if count else "Downloads"
+        self._download_button.setToolTip(label)
+        self._download_button.setAccessibleName(label)
+
+    def _toggle_downloads(self) -> None:
+        if self._downloads_popover.isVisible():
+            self._downloads_popover.hide()
+        else:
+            self._show_downloads()
+
+    def _show_downloads(self) -> None:
+        if self._closing or self._private_id is not None:
+            return
+        self._downloads_popover.show_for(self._download_button)
+        self._download_button.setChecked(True)
+
     def _build_menus(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
         view_menu = self.menuBar().addMenu("&View")
@@ -407,6 +537,11 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        private_act = QAction("Private chat", self)
+        private_act.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        private_act.triggered.connect(lambda: self._sidebar.select_section(PRIVATE))
+        file_menu.addAction(private_act)
+
         settings_act = QAction("Settings…", self)
         settings_act.setObjectName("settingsAction")
         settings_act.setShortcut(QKeySequence.StandardKey.Preferences)
@@ -414,6 +549,18 @@ class MainWindow(QMainWindow):
         settings_act.triggered.connect(self._open_settings)
         file_menu.addAction(settings_act)
         self._settings_action = settings_act
+
+        sidebar_act = QAction("Hide Sidebar", self)
+        sidebar_act.setObjectName("toggleSidebarAction")
+        sidebar_act.setShortcut(QKeySequence("Ctrl+Meta+S" if sys.platform == "darwin"
+                                              else "Ctrl+Shift+S"))
+        sidebar_act.triggered.connect(self._sidebar.toggle_collapsed)
+        self._sidebar.collapsed_changed.connect(
+            lambda collapsed: sidebar_act.setText("Show Sidebar" if collapsed else "Hide Sidebar")
+        )
+        sidebar_act.setText("Show Sidebar" if self._sidebar.is_collapsed() else "Hide Sidebar")
+        view_menu.addAction(sidebar_act)
+        view_menu.addSeparator()
 
         chats_act = QAction("Chats", self)
         chats_act.setObjectName("chatsAction")
@@ -429,11 +576,15 @@ class MainWindow(QMainWindow):
         view_menu.addAction(models_act)
         self._shortcut_models = models_act
 
-        memory_act = QAction("Second brain", self)
+        memory_act = QAction("Second Brain", self)
         memory_act.setObjectName("memoryAction")
         memory_act.setShortcut(QKeySequence("Ctrl+3"))
         memory_act.triggered.connect(lambda: self._sidebar.select_section(MEMORY))
         view_menu.addAction(memory_act)
+        downloads_act = QAction("Downloads", self)
+        downloads_act.setShortcut(QKeySequence("Ctrl+4"))
+        downloads_act.triggered.connect(self._show_downloads)
+        view_menu.addAction(downloads_act)
 
         find_act = QAction("Find", self)
         find_act.setObjectName("findAction")
@@ -485,22 +636,119 @@ class MainWindow(QMainWindow):
             self._settings.remove(KEY_LAST_CONVERSATION_ID)
         self._settings.sync()
 
+    def _default_model_changed(self, ref):
+        self._library.default_model = ref
+        self._project_home.refresh_labels()
+
+    def _create_project(self):
+        if self._private_id is not None:
+            return
+        self._sidebar.select_section(CHATS)
+        if self._project_form is None:
+            self._project_form = ProjectSheet(self._detail_stack, names=self._model_names)
+            self._project_form.accepted.connect(self._save_new_project)
+            self._project_form.rejected.connect(self._cancel_new_project)
+            self._project_form.browse_requested.connect(self._browse_project_models)
+            self._detail_stack.addWidget(self._project_form)
+        if self._catalog_ready:
+            self._project_form.set_catalog(self._catalog_models, self._catalog_availability)
+        self._detail_stack.setCurrentWidget(self._project_form)
+        self._chat_view.catalog_requested.emit()
+        self._sync_title()
+        self._project_form._name.setFocus()
+
+    def _discard_project_form(self):
+        if self._project_return is self._project_form:
+            self._project_return = None
+        self._models.return_to_project.hide()
+        self._detail_stack.removeWidget(self._project_form)
+        self._project_form.deleteLater()
+        self._project_form = None
+
+    def _save_new_project(self):
+        name, guidance, model = self._project_form.values()
+        try:
+            project = self._library.create_project(name, guidance, model)
+        except Exception as exc:
+            self._project_form.show_catalog_error(str(exc))
+            return
+        self._discard_project_form()
+        self._sidebar.refresh(select_project_id=project.id)
+
+    def _cancel_new_project(self):
+        self._discard_project_form()
+        self._on_filter(self._sidebar.current_selection())
+
+    def _return_to_project(self):
+        if self._private_id is not None:
+            return
+        target = self._project_return
+        self._project_return = None
+        self._models.return_to_project.hide()
+        if target is self._project_home and self._project_home.project is not None:
+            self._sidebar.select_project(self._project_home.project.id)
+        elif target is not None and target is self._project_form:
+            self._create_project()
+        self._sync_title()
+
+    def _show_selected_chat(self):
+        self._sidebar.select_section(CHATS)
+        self._detail_stack.setCurrentWidget(self._chat_view)
+        self._on_selected(self._list.selected_id())
+        self._sync_title()
+
+    def _open_project_chat(self, cid):
+        self._list.select_id(cid)
+        self._show_selected_chat()
+
+    def _start_project_chat(self, pid, text, ref):
+        self._sync_model_activity()
+        if self._project_home._busy or self._private_id is not None:
+            return
+        try:
+            conversation = self._library.create_conversation(project_id=pid, model=ref)
+        except Exception as exc:
+            self._project_home.status.setText(str(exc))
+            self._project_home.status.show()
+            return
+        self._list.refresh(select_id=conversation.summary.id)
+        self._show_selected_chat()
+        self._chat_view.composer().set_text(text)
+        self._chat_view.composer().submit()
+        # A rejected send retains its text in the regular chat's recovery path.
+        self._project_home.sent()
+        self._project_home.refresh_chats()
+
     def _open_settings(self) -> None:
+        self._sidebar.select_section(SETTINGS)
+
+    def _show_settings(self) -> None:
         if self._settings_dialog is None:
             db_path = getattr(self._store, "path", None)
             self._settings_dialog = SettingsDialog(
-                self,
+                self._detail_stack,
                 settings=self._settings,
+                names=self._model_names,
                 db_path=Path(db_path) if db_path is not None else None,
                 log_path=default_log_path(),
+            )
+            self._settings_dialog.default_model_changed.connect(self._default_model_changed)
+            self._settings_dialog.return_sends_changed.connect(
+                self._project_home.composer.set_return_sends
             )
             self._settings_dialog.appearance_changed.connect(self._on_appearance)
             self._settings_dialog.return_sends_changed.connect(self._chat_view.set_return_sends)
             self._settings_dialog.rescan_requested.connect(self._rescan_catalog)
+            self._settings_dialog.automatic_memory_changed.connect(self._on_automatic_memory)
+            self._settings_dialog.back_requested.connect(
+                lambda: self._sidebar.select_section(CHATS)
+            )
+            self._detail_stack.addWidget(self._settings_dialog)
         self._settings_dialog.reload()
-        self._settings_dialog.show()
-        self._settings_dialog.raise_()
-        self._settings_dialog.activateWindow()
+        if self._catalog_ready:
+            self._settings_dialog.set_catalog(self._catalog_models, self._catalog_availability)
+        self._detail_stack.setCurrentWidget(self._settings_dialog)
+        self._chat_view.catalog_requested.emit()
 
     def _open_shortcuts(self) -> None:
         if self._shortcuts_dialog is None:
@@ -514,6 +762,7 @@ class MainWindow(QMainWindow):
         if isinstance(qt_app, QApplication):
             apply_studio(qt_app, theme=theme)
         self._chat_view.refresh_theme()
+        self._sidebar.refresh_theme()
         self._memory.refresh_theme()
         for view in self.findChildren(QAbstractItemView):
             viewport = view.viewport()
@@ -528,6 +777,8 @@ class MainWindow(QMainWindow):
         self._sync_sidebar_size()
 
     def _sync_sidebar_size(self) -> None:
+        if self._private_id is not None:
+            return
         sizes = self._splitter.sizes()
         if len(sizes) != 2:
             return
@@ -544,8 +795,67 @@ class MainWindow(QMainWindow):
         if self._chat_service is not None:
             self._chat_service.set_system_prompt(conversation_id, text)
 
+    def _set_private_workspace(self, active: bool) -> None:
+        if active:
+            self._private_sidebar_sizes = self._splitter.sizes()
+            self._downloads_popover.hide()
+            self._sidebar.hide()
+            self._workspace_toolbar.hide()
+            allowed = {self._force_stop_action, self._shortcut_composer}
+            self._private_disabled_actions = {
+                action: action.isEnabled()
+                for menu in self.menuBar().actions() if menu.menu() is not None
+                for action in menu.menu().actions()
+                if action not in allowed and not action.isSeparator()
+            }
+            for action in self._private_disabled_actions:
+                action.setEnabled(False)
+        else:
+            self._sidebar.show()
+            self._workspace_toolbar.show()
+            self._splitter.setSizes(self._private_sidebar_sizes)
+            for action, enabled in self._private_disabled_actions.items():
+                action.setEnabled(enabled)
+            self._private_disabled_actions.clear()
+
+    def _clear_private(self) -> None:
+        if self._private_id is None:
+            return
+        self._leave_private()
+        self._sidebar.end_private()
+        self._on_selected(self._list.selected_id())
+        self._chat_view.composer().set_text(self._private_return_draft)
+        self._private_return_draft = ""
+
+    def _leave_private(self) -> None:
+        cid = self._private_id
+        if cid is None or self._chat_service is None:
+            return
+        self._chat_cancel.set()
+        self._chat_view.clear_private(cid)
+        self._chat_service.discard_private(cid)
+        self._private_id = None
+        self._set_private_workspace(False)
+        self._chat_view.set_inspector_open(self._private_return_inspector)
+
     def _on_section(self, key: str) -> None:
-        if key == MODELS:
+        if key != PRIVATE and self._private_id is not None:
+            return
+        if key == PRIVATE:
+            if self._chat_service is not None and self._private_id is None:
+                self._chat_view.inspector().flush_prompt()
+                self._private_return_draft = self._chat_view.composer().text()
+                self._private_return_inspector = self._chat_view.inspector_open()
+                conversation = self._chat_service.create_private()
+                self._private_id = conversation.summary.id
+                self._set_private_workspace(True)
+                self._chat_view.composer().clear()
+                self._chat_view.set_conversation(conversation)
+            self._detail_stack.setCurrentWidget(self._chat_view)
+            self._sync_memory_available()
+        elif key == SETTINGS:
+            self._show_settings()
+        elif key == MODELS:
             self._list.set_project_filter(...)
             self._detail_stack.setCurrentWidget(self._models)
             self._models.refresh()
@@ -558,7 +868,32 @@ class MainWindow(QMainWindow):
         self._sync_sidebar_size()
         self._sync_title()
 
+    def _manage_chat_models(self) -> None:
+        if self._private_id is not None:
+            self._chat_view.show_banner("Clear private chat to browse or download more models.")
+            return
+        self._sidebar.select_section(MODELS)
+
+    def _browse_models(self) -> None:
+        self._downloads_popover.hide()
+        self._sidebar.select_section(MODELS)
+        self._models._tabs.setCurrentIndex(1)
+
+    def _browse_project_models(self) -> None:
+        self._project_return = self._detail_stack.currentWidget()
+        self._models.return_to_project.show()
+        self._browse_models()
+
+    def _open_downloaded_model(self, ref: ModelRef) -> None:
+        if self._private_id is not None:
+            return
+        self._downloads_popover.hide()
+        self._sidebar.select_section(MODELS)
+        self._models.open_downloaded_model(ref)
+
     def _on_chat_with_model(self, ref: object) -> None:
+        if self._private_id is not None:
+            return
         if isinstance(ref, ModelRef):
             self._list.new_chat(model=ref)
             return
@@ -580,21 +915,40 @@ class MainWindow(QMainWindow):
         self._list.focus_search()
 
     def _focus_composer(self) -> None:
-        if self._sidebar.current_section() != CHATS:
+        if self._sidebar.current_section() not in {CHATS, PRIVATE}:
             return
-        self._chat_view.focus_composer()
+        if self._detail_stack.currentWidget() is self._project_home:
+            self._project_home.composer.focus_edit()
+        else:
+            self._chat_view.focus_composer()
 
     def _rescan_catalog(self) -> None:
         if not self._models.refresh():
             self._chat_view.catalog_requested.emit()
 
     def _on_catalog_listed(self, models: object, availability: object) -> None:
+        self._catalog_models = list(models)
+        self._catalog_availability = dict(availability)
+        self._catalog_ready = True
+        self._project_home.set_catalog(models, availability)
+        if self._project_form is not None:
+            self._project_form.set_catalog(models, availability)
+        if self._settings_dialog is not None:
+            self._settings_dialog.set_catalog(models, availability)
+        self._sidebar.set_catalog(models, availability)
         self._chat_view.set_catalog(models, availability)
         self._models.apply_listed(models, availability)
         if self._models.job_kind() == "refresh":
             self._models.finish_job()
 
     def _on_catalog_failed(self, code: str, message: str) -> None:
+        if self._project_form is not None:
+            self._project_form.show_catalog_error(message or code)
+        self._project_home.status.setText(message or code)
+        self._project_home.status.show()
+        if self._settings_dialog is not None:
+            self._settings_dialog._default_model.hint.setText(message or code)
+            self._settings_dialog._default_model.hint.show()
         self._chat_view.on_catalog_failed(code, message)
         if self._models.job_kind() == "refresh":
             self._models.apply_failed(EngineError(code, message))
@@ -627,6 +981,7 @@ class MainWindow(QMainWindow):
             or (self._chat_service is not None and self._chat_service._generating)
             or self._chat_view._pending is not None
         )
+        self._project_home.set_busy(busy)
         self.statusBar().setVisible(busy)
         self._force_stop.setEnabled(busy and not self._stop_requested)
         self._force_stop_action.setEnabled(busy and not self._stop_requested)
@@ -637,6 +992,7 @@ class MainWindow(QMainWindow):
             if self._stop_requested
             else f"Loading {status.loading.name}…"
             if status.loading is not None
+            else "Organizing chat memories in Second Brain…" if self._memory_busy
             else "Model working…"
         )
         self.statusBar().showMessage(message)
@@ -674,6 +1030,13 @@ class MainWindow(QMainWindow):
         self._models.finish_job()
         self._sync_model_activity()
 
+    def _on_catalog_model_deleted(self) -> None:
+        self._chat_view.set_session_busy(False)
+        self._models.apply_unloaded()
+        self._models.finish_job()
+        self._models.refresh()
+        self._sync_model_activity()
+
     def _on_catalog_model_failed(self, code: str, message: str) -> None:
         self._chat_view.set_session_busy(False)
         self._models.apply_failed(EngineError(code, message))
@@ -696,16 +1059,26 @@ class MainWindow(QMainWindow):
             return
         if selection.folder == FOLDER_ALL:
             self._list.set_project_filter(...)
-        elif selection.folder == FOLDER_UNGROUPED:
-            self._list.set_project_filter(None)
+            self._detail_stack.setCurrentWidget(self._chat_view)
         elif selection.folder == FOLDER_PROJECT:
             self._list.set_project_filter(selection.project_id, project_name=selection.project_name)
+            project = next((p for p in self._library.list_projects()
+                            if p.id == selection.project_id), None)
+            if project is not None:
+                self._project_home.set_project(project)
+                self._detail_stack.setCurrentWidget(self._project_home)
+                if not self._catalog_ready:
+                    self._chat_view.catalog_requested.emit()
         self._sync_title()
 
     def _on_chat_created(self, _cid: int) -> None:
-        self._sidebar.select_section(CHATS)
+        self._show_selected_chat()
+        self._project_home.refresh_chats()
 
     def _on_selected(self, cid: object) -> None:
+        if self._private_id is not None:
+            return
+        self._project_home.refresh_chats()
         self._sync_memory_available()
         self._sync_title()
         if isinstance(cid, int):
@@ -735,24 +1108,40 @@ class MainWindow(QMainWindow):
         if cid is None or self._chat_service is None:
             return
         self._chat_service.set_model(cid, ref)
-        getter = getattr(self._library, "get_conversation", None)
-        if callable(getter):
-            self._chat_view.set_conversation(getter(cid))
+        self._chat_view.set_conversation(self._chat_service.get_conversation(cid))
 
     def _on_chat_accepted(self, cid: int, _kind: str) -> None:
-        self._list.refresh(select_id=cid)
+        if cid < 0:
+            return
+        self._list.refresh(select_id=cid if self._sidebar.current_section() == CHATS
+                           else self._list.selected_id())
         self._sync_title()
 
     def _on_turn_finished(self, cid: int) -> None:
-        self._list.refresh(select_id=cid)
+        if cid < 0:
+            return
+        self._list.refresh(select_id=cid if self._sidebar.current_section() == CHATS
+                           else self._list.selected_id())
         self._sync_title()
 
     def _sync_title(self) -> None:
+        if self._sidebar.current_section() == PRIVATE:
+            self.setWindowTitle(f"Private chat — No history or memories — {_TITLE}")
+            return
+        if self._sidebar.current_section() == SETTINGS:
+            self.setWindowTitle(f"Settings — {_TITLE}")
+            return
         if self._sidebar.current_section() == MEMORY:
-            self.setWindowTitle(f"Second brain — {_TITLE}")
+            self.setWindowTitle(f"Second Brain — {_TITLE}")
             return
         if self._sidebar.current_section() == MODELS:
             self.setWindowTitle(f"Models — {_TITLE}")
+            return
+        if self._detail_stack.currentWidget() is self._project_home:
+            self.setWindowTitle(f"{self._project_home.project.name} — {_TITLE}")
+            return
+        if self._detail_stack.currentWidget() is self._project_form:
+            self.setWindowTitle(f"Create a project — {_TITLE}")
             return
         title = self._list.selected_title()
         self.setWindowTitle(title if title else _TITLE)
@@ -760,7 +1149,8 @@ class MainWindow(QMainWindow):
     def _sync_memory_available(self) -> None:
         cid = self._list.selected_id()
         available = False
-        if cid is not None and self._chat_service is not None and not self._memory_busy:
+        if (cid is not None and self._chat_service is not None and not self._memory_busy
+                and self._private_id is None):
             try:
                 conversation = self._library.get_conversation(cid)
                 available = bool(conversation.messages and conversation.summary.model) and not (
@@ -771,12 +1161,19 @@ class MainWindow(QMainWindow):
         self._memory.set_capture_available(available)
 
     def _remember_conversation(self) -> None:
-        if self._closing or self._memory_busy or self._worker is None:
+        if (self._closing or self._memory_busy or self._worker is None
+                or self._private_id is not None):
             return
         cid = self._list.selected_id()
         if cid is None:
             return
         self._sidebar.select_section(MEMORY)
+        self._start_memory(cid)
+
+    def _start_memory(self, cid: int, *, automatic: bool = False) -> None:
+        if cid < 0:
+            return
+        self._automatic_capture = automatic
         self._memory_busy = True
         self._memory_cancel = threading.Event()
         self._memory.set_busy(True)
@@ -785,11 +1182,43 @@ class MainWindow(QMainWindow):
         self._models.set_chat_busy(True)
         self.memory_requested.emit(cid, self._memory_vault, self._memory_cancel)
 
+    def _schedule_automatic_memory(
+        self, cid: int, cancelled: bool, chunks: int, _elapsed: float, _tps: float,
+    ) -> None:
+        if (not self._closing and cid >= 0 and not cancelled and chunks > 0
+                and as_bool(self._settings.value(KEY_AUTO_MEMORY, True), True)):
+            self._pending_memories.add(cid)
+
+    def _drain_automatic_memories(self) -> None:
+        service = self._chat_service
+        if (self._closing or not self._pending_memories or self._memory_busy
+                or self._private_id is not None or service is None
+                or self._worker is None or service._generating
+                or self._chat_view.is_streaming() or self._chat_view._pending is not None
+                or self._session.status().generating or self._models.job_kind() is not None
+                or not as_bool(self._settings.value(KEY_AUTO_MEMORY, True), True)):
+            return
+        cid = min(self._pending_memories)
+        self._pending_memories.discard(cid)
+        try:
+            conversation = service.get_conversation(cid)
+        except EngineError:
+            return
+        if conversation.messages and conversation.summary.model:
+            self._start_memory(cid, automatic=True)
+
+    def _on_automatic_memory(self, enabled: bool) -> None:
+        if not enabled:
+            self._pending_memories.clear()
+            if self._automatic_capture:
+                self._cancel_memory()
+
     def _cancel_memory(self) -> None:
         self._memory_cancel.set()
         self._memory.set_status("Cancelling memory creation…")
 
     def _finish_memory(self) -> None:
+        self._automatic_capture = False
         self._memory_busy = False
         self._memory.set_busy(False)
         self._chat_view.set_session_busy(False)
@@ -799,12 +1228,13 @@ class MainWindow(QMainWindow):
         self._sync_model_activity()
 
     def _on_memories_created(self, result: object) -> None:
+        automatic = self._automatic_capture
         self._finish_memory()
         if not isinstance(result, CaptureResult):
             return
         if result.already_saved:
             self._memory.set_status(
-                "This version of the conversation is already in your second brain."
+                "This version of the conversation is already in your Second Brain."
             )
         elif result.notes:
             count = len(result.notes)
@@ -814,7 +1244,7 @@ class MainWindow(QMainWindow):
             )
         else:
             self._memory.set_status("The model found no new durable memories in this conversation.")
-        self._memory.refresh(select_key=result.notes[0] if result.notes else None)
+        self._memory.refresh(select_key=result.notes[0] if result.notes and not automatic else None)
 
     def _on_memories_failed(self, _code: str, message: str) -> None:
         self._finish_memory()

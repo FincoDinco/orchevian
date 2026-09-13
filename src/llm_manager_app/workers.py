@@ -33,6 +33,7 @@ class ChatWorker(QObject):
     unload_failed = Signal(str, str)
     catalog_loaded = Signal(object)
     catalog_unloaded = Signal()
+    catalog_deleted = Signal()
     catalog_failed = Signal(str, str)
     memories_created = Signal(object)
     memories_failed = Signal(str, str)
@@ -122,6 +123,19 @@ class ChatWorker(QObject):
             self.catalog_failed.emit("backend_unavailable", str(exc))
             return
         self.catalog_unloaded.emit()
+
+    @Slot(object)
+    def catalog_delete(self, ref: object) -> None:
+        try:
+            if not isinstance(ref, ModelRef):
+                raise EngineError("config_invalid", "Invalid model.")
+            self._chat.catalog_delete(ref)
+        except EngineError as exc:
+            self.catalog_failed.emit(exc.code, str(exc))
+        except Exception as exc:
+            self.catalog_failed.emit("delete_failed", str(exc))
+        else:
+            self.catalog_deleted.emit()
 
     @Slot(int, object, object)
     def remember(self, conversation_id: int, vault: object, cancel: object) -> None:

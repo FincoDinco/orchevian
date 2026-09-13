@@ -1,4 +1,6 @@
-# LLM Manager: Greenfield Redesign
+# Orchevian: Greenfield Redesign
+
+**Naming update (2026-09-11):** The product and distribution are now **Orchevian**. Launch the GUI with `uv run orchevian` and the CLI with `uv run orchevian-engine`. Earlier product-name decisions are superseded. The implementation packages and real repository paths below remain unchanged; legacy launch commands, data directories, and environment variables remain supported. New installs use `~/.local/share/orchevian/`; existing installs reuse `~/.local/share/llm-manager/`. GUI preferences migrate once into Orchevian's settings namespace.
 
 | Field | Value |
 | --- | --- |
@@ -6,7 +8,7 @@
 | **Author** | Grok (for Seth Hardin) |
 | **Date** | 2026-09-02 |
 | **Revision** | 6 — Seth reversed SwiftUI: one Python codebase, new PySide6 GUI, in-process `llm_engine`, macOS + Windows + Linux |
-| **Product** | LLM Manager — local-first desktop app for running LLMs on this machine |
+| **Product** | Orchevian — local-first desktop app for running LLMs on this machine |
 | **Workspace** | `/Users/sethhardin/llm-manager-ai` |
 | **Legacy (read-only)** | `/Users/sethhardin/dev/llm-manager/llm-manager-ai` (themed Qt), `/Users/sethhardin/dev/llm-manager/llm-manager-human` (original Qt) |
 | **Existing data** | `~/.local/share/llm-manager/data.db` — migrate, do not wipe |
@@ -15,7 +17,11 @@ This is a new product and a new codebase. It is not a restyle of `chat_page.py`.
 
 **Workspace update (2026-09-07):** Seth approved a substantial visual and workflow redesign. The implemented UI now uses one combined navigation/conversation sidebar, a centered chat workspace, fully hideable chat settings, and a searchable model library with its own detail surface. K5, K7, Information Architecture, and the visual tokens below describe this revision. Earlier PR titles and roadmap examples remain historical planning context.
 
-**Second brain implementation (2026-09-07):** The sidebar also opens a Markdown vault with a reader/editor, wiki links, backlinks, search, and an interactive graph. `MemoryVault` owns file access, revision checks, and trash; the GUI does not access SQLite. `ChatService.capture_memories` shares the model session with chat and extracts at most six notes with exact conversation evidence, linked source snapshots, and model attribution. A cancellable Qt worker performs capture, and unchanged saved conversations are deduplicated. Optional keyword recall includes at most four non-source notes in chat context and is enabled by default. The vault defaults to `second-brain/` beside the database; vault selection and recall preferences live in `QSettings`. This adds Markdown files without changing the conversation database schema.
+**Memory and privacy update (2026-09-11):** Settings is embedded in the workspace. Automatic memory extraction is enabled by default for completed regular responses, uses the existing evidence-checked note pipeline, and can be disabled in General. Private chats use ephemeral engine conversations with negative IDs, never write the library or vault, never recall saved context, and are erased when explicitly cleared or the app closes. Private Chat opens from the top toolbar and fills the workspace until cleared. Their prompts include only messages from the same current private chat.
+
+**Human Interface Guidelines pass (2026-09-09):** Apple’s HIG guides the desktop interactions within the existing cross-platform PySide6 app. The View menu offers Show/Hide Sidebar and a keyboard shortcut, following [sidebar guidance](https://developer.apple.com/design/human-interface-guidelines/sidebars). Downloads open from the top-right toolbar in a transient panel, preserving the current workspace. Compact download rows expand to reveal repository and version details, following [popover](https://developer.apple.com/design/human-interface-guidelines/popovers) and [disclosure control](https://developer.apple.com/design/human-interface-guidelines/disclosure-controls) guidance. Model technical details and maintenance actions are also collapsed by default. Sidebar branding and duplicate creation controls move into a restrained toolbar; macOS uses Qt’s Mac style and unified title/toolbar support. Actual transfers show byte progress, queued work shows a waiting status, and cancellation shows activity until cleanup completes; completed work hides its progress indicator, following [progress guidance](https://developer.apple.com/design/human-interface-guidelines/progress-indicators). Download controls identify the repository and version to assistive technology. Permanent model deletion uses an explicit Delete Model action with Cancel as the default and Escape action, following [alert guidance](https://developer.apple.com/design/human-interface-guidelines/alerts). This pass does not establish native AppKit, Liquid Glass, or VoiceOver parity; those require platform-specific implementation and testing.
+
+**Second Brain implementation (2026-09-07):** The sidebar also opens a Markdown vault with a reader/editor, wiki links, backlinks, search, and an interactive graph. `MemoryVault` owns file access, revision checks, and trash; the GUI does not access SQLite. `ChatService.capture_memories` shares the model session with chat and extracts at most six notes with exact conversation evidence, linked source snapshots, and model attribution. A cancellable Qt worker performs capture, and unchanged saved conversations are deduplicated. Optional keyword recall includes at most four non-source notes in chat context and is enabled by default. The vault defaults to `second-brain/` beside the database; vault selection and recall preferences live in `QSettings`. This adds Markdown files without changing the conversation database schema.
 
 **Model recovery update (2026-09-07):** A stuck load must be stoppable without waiting for backend code to cooperate. Production backends now use a disposable spawned process for loading and inference, with private pipes and no database access in the child. Engine services and the GUI remain in the main app. Direct cancellation bypasses the occupied Qt worker; cancellation tokens also cover requests queued before loading starts. Load and first-response waits have 120-second deadlines. Models exposes Cancel loading, and a global Force stop model control remains accessible across workspaces. Ollama load now preloads the model, and unload requests `keep_alive: 0` with a five-second timeout. Failure to confirm external Ollama cleanup is reported explicitly. This supersedes the earlier single-process runtime restriction in K18.
 
@@ -23,7 +29,7 @@ This is a new product and a new codebase. It is not a restyle of `chat_page.py`.
 
 ## Overview
 
-LLM Manager is a personal, local-first desktop app for discovering, loading, and chatting with large language models on this machine. It is not a multi-user SaaS, not a cloud wrapper, and not a themed experiment.
+Orchevian is a personal, local-first desktop app for discovering, loading, and chatting with large language models on this machine. It is not a multi-user SaaS, not a cloud wrapper, and not a themed experiment.
 
 The current app failed as a *product*, not as a missing stylesheet. Two Grok sessions tried to rescue a Claude-built PySide6 GUI by restyling it; both made the information architecture and the visual system worse. Chat, projects, settings, models, templates, and the API server were stuffed through a chat-centric shell (`ChatPage.attach_settings` in [`main_window.py`](/Users/sethhardin/dev/llm-manager/llm-manager-ai/src/llm_manager/gui/main_window.py)). Inference, SQLite, and uvicorn lifecycle leaked into widgets. `chat_page.py` is 1,337 lines and owns the sidebar, the conversation tree, the HTML-table transcript, the composer, and a settings stack.
 
@@ -40,17 +46,19 @@ v1 ships: model list + select, new chat, streaming reply, conversation list with
 
 ---
 
+**Project workspace update (2026-09-12):** Project creation is an embedded QWidget in the center stack; selecting a project opens a home with a composer, conversation list, and inline guidance editor. No project dialog or separate window is used. Home drafts are owned per project for the app session. Settings supplies an app-wide model fallback, resolved after explicit and project choices without rewriting existing conversations. Saved unavailable references remain visible. Downloaded models expose an inline Edit model flow for display names only. File context, scheduling, connectors, and improved download transport remain future work.
+
 ## Key Decisions
 
 | # | Decision | Rationale |
 | --- | --- | --- |
 | K1 | **Greenfield rebuild** in `/Users/sethhardin/llm-manager-ai`. Do not copy `chat_page.py`, `theme.py`, `native_glass.py`, or the QSS. | Two restyle sessions failed. The foundation is the problem. |
 | K2 | **Option A: new PySide6 GUI + in-process `llm_engine`.** Not SwiftUI. Not a browser/Tauri/Electron shell. Not two GUIs. | Seth requires a GUI on Linux, Windows, and Mac (2026-09-02, reversing the Swift pick). MLX is a Mac-only *backend extra*, not a reason to lock the GUI. |
-| K3 | **Python package is `llm_engine`**, product name is **LLM Manager** for v1. GUI package is `llm_manager_app`. | Marks the break from `llm_manager`. Seth confirmed keep the name. |
-| K4 | **GUI ↔ engine is in-process Python** (typed service methods, not JSON-RPC). Optional OpenAI HTTP is a *separate* loopback listener the engine owns. | One language; inference is isolated in a disposable worker. `llm-engine serve` is only the OpenAI API, not a GUI control plane. |
+| K3 | **Python package is `llm_engine`**, product name is **Orchevian** for v1. GUI package is `llm_manager_app`. | Marks the break from `llm_manager`. Renamed to Orchevian on 2026-09-11. |
+| K4 | **GUI ↔ engine is in-process Python** (typed service methods, not JSON-RPC). Optional OpenAI HTTP is a *separate* loopback listener the engine owns. | One language; inference is isolated in a disposable worker. `orchevian-engine serve` is only the OpenAI API, not a GUI control plane. |
 | K5 | **Two-pane shell** (QSplitter): unified sidebar · workspace. Models owns an internal list/detail split. | Give conversations more space; keep projects, search, and recent chats together. |
-| K6 | **Settings as a separate window** (⌘, / Ctrl+,). Per-chat system prompt and sampling live in a chat inspector, not in Settings. | The old app hid Models/Storage/Templates/Server/Appearance behind a “mode” menu on the chat rail. |
-| K7 | **Visual system “Studio”**: system UI font, 8px controls, 14px composer, dedicated sidebar surface, palette-aware Qt line icons, and restrained blue accents. | Clear hierarchy, readable contrast in both themes, and a comfortable reading width. |
+| K6 | **Settings inside the main workspace** (⌘, / Ctrl+,). Per-chat system prompt and sampling live in a chat inspector, not in Settings. | The old app hid Models/Storage/Templates/Server/Appearance behind a “mode” menu on the chat rail. |
+| K7 | **Visual system “Studio”**: system UI font, 12px controls, 26px composer, dedicated sidebar surface, palette-aware Qt line icons, and restrained blue accents. | Clear hierarchy, readable contrast in both themes, and a comfortable reading width. |
 | K8 | **`list_conversations()` returns summaries, never messages.** Messages load per conversation. | Old `database.list_conversations()` joins every message of every chat. |
 | K9 | **Explicit `load` / `unload` with a single loaded model cache.** `stream_generate` does not reload weights. | `MLXBackend.stream_chat` calls `mlx_lm.load()` on every send. `GGUFBackend` constructs a new `Llama()` on every send. |
 | K10 | **Backend errors propagate.** Ollama-down is a visible status, not an empty list. | `backends.list_all_models()` swallows all exceptions. |
@@ -58,7 +66,7 @@ v1 ships: model list + select, new chat, streaming reply, conversation list with
 | K12 | **Migrate `data.db` in place.** Path is `Path.home() / ".local" / "share" / "llm-manager" / "data.db"` **on all OSes** for v1. | One conversation already lives there. Do not fork a Windows `%APPDATA%` path in v1. |
 | K13 | **GUI is macOS + Windows + Linux.** App Sandbox off. Not MAS. | Seth’s requirement. MLX extra is Darwin/arm64 only; missing extra → unavailable, no crash. |
 | K14 | **Ollama is the first-class backend.** | This machine’s library today is four Ollama tags and empty `~/models/{mlx,gguf}`. |
-| K15 | **Engine PRs first. Do not start GUI PRs until ChatService (PR 5) exists.** Fallback if the GUI slips: `llm-engine chat` TTY. | Domain logic is independently testable. We do not “just throw a window up.” |
+| K15 | **Engine PRs first. Do not start GUI PRs until ChatService (PR 5) exists.** Fallback if the GUI slips: `orchevian-engine chat` TTY. | Domain logic is independently testable. We do not “just throw a window up.” |
 | K16 | **No dedicated Server page.** OpenAI **endpoint** in PR 6 + Settings → API tab in PR 12b. Templates stay **off the sidebar until PR 14** (not a v1 blocker). | Seth confirmed 2026-09-02. |
 | K17 | **One `QMainWindow`.** PySide6 ≥ 6.7, Qt 6. No Swift `WindowGroup`. | One generation globally. |
 | K18 | **Disposable model worker process.** Quit cancels model work and terminates its runtime; engine services and the database stay in the main app. | Native model loaders must be stoppable even when blocked or holding the GIL. |
@@ -153,7 +161,7 @@ Rev 6 still forbids copying those widgets. The new GUI is a *new* PySide6 app be
 
 ### Goals (v1 must-have)
 
-- Desktop app on **macOS, Windows, and Linux**: sidebar + list + content, menu bar, Settings window.
+- Desktop app on **macOS, Windows, and Linux**: sidebar + list + content, menu bar, Settings workspace.
 - Engine/UI split: `llm_engine` does not import PySide6. GUI does not import sqlite3, `mlx_lm`, `llama_cpp`, fastapi, or huggingface_hub.
 - Model catalog: list MLX (when extra present on Darwin/arm64), GGUF (when extra present), Ollama; select one; show availability errors.
 - Chat: new conversation, streaming on a background thread, stop, regenerate, system prompt, Precise/Balanced/Creative, temperature / top_p / max_tokens.
@@ -163,7 +171,7 @@ Rev 6 still forbids copying those widgets. The new GUI is a *new* PySide6 app be
 - Migrate existing `data.db` without wiping Seth’s row or resetting `sqlite_sequence`.
 - Tests of domain logic (conversations, migration, FakeBackend, ChatService, API start/stop), not `assert True`.
 - UI never blocks on inference, load, or download.
-- Launch: `uv run llm-manager` (and `uv run llm-engine chat` as TTY fallback).
+- Launch: `uv run orchevian` (and `uv run orchevian-engine chat` as TTY fallback).
 
 ### Nice-to-have in v1 if cheap
 
@@ -185,7 +193,7 @@ Rev 6 still forbids copying those widgets. The new GUI is a *new* PySide6 app be
 - Mobile.
 - Bundled runtime / PyInstaller as a v1 gate (v1.1).
 - VoiceOver / reduced-motion as a v1 gate.
-- Dual-writing `data.db` with the old Qt app. Quit the old app before live `uv run llm-manager`.
+- Dual-writing `data.db` with the old Qt app. Quit the old app before live `uv run orchevian`.
 
 ---
 
@@ -229,13 +237,13 @@ Conflicts with “desktop app.” FastAPI stays only as the OpenAI face of the e
 
 ```mermaid
 flowchart LR
-  subgraph proc["Main app: uv run llm-manager"]
+  subgraph proc["Main app: uv run orchevian"]
     subgraph qt["llm_manager_app (PySide6, main thread)"]
       Win["QMainWindow"]
       Split["QSplitter: sidebar + workspace"]
       ChatUI["Chat detail"]
       ModelsUI["Models detail"]
-      Settings["Settings window"]
+      Settings["Settings workspace"]
       Win --> Split --> ChatUI
       Split --> ModelsUI
     end
@@ -290,7 +298,7 @@ Rules:
   pyproject.toml
   src/llm_engine/                 # NO PySide6
     __init__.py
-    __main__.py                   # llm-engine CLI
+    __main__.py                   # orchevian-engine CLI
     cli.py                        # chat | models | serve | migrate | health
     config.py                     # config.json
     domain/{models.py, chat.py, errors.py}
@@ -325,12 +333,12 @@ Legacy trees stay read-only until parity; then archive.
 Dev launch:
 
 ```bash
-uv run llm-manager          # GUI
-uv run llm-engine chat      # TTY fallback
-uv run llm-engine serve     # OpenAI HTTP only
-uv run llm-engine models
-uv run llm-engine migrate
-uv run llm-engine health    # print session + db + api status (in-process)
+uv run orchevian          # GUI
+uv run orchevian-engine chat      # TTY fallback
+uv run orchevian-engine serve     # OpenAI HTTP only
+uv run orchevian-engine models
+uv run orchevian-engine migrate
+uv run orchevian-engine health    # print session + db + api status (in-process)
 ```
 
 ### Engine: domain types
@@ -655,11 +663,11 @@ Progress callback actually plugged into `snapshot_download` / `hf_hub_download`.
 ### CLI
 
 ```
-llm-engine serve [--db PATH] [--port N]   # OpenAI HTTP only
-llm-engine health
-llm-engine models
-llm-engine chat [--model ollama/qwen3:8b]
-llm-engine migrate [--db PATH]
+orchevian-engine serve [--db PATH] [--port N]   # OpenAI HTTP only
+orchevian-engine health
+orchevian-engine models
+orchevian-engine chat [--model ollama/qwen3:8b]
+orchevian-engine migrate [--db PATH]
 ```
 
 `chat` is in-process ChatService (TTY). If the GUI is already running against the same DB, sqlite WAL + busy_timeout apply; prefer not to dual-write generate. `health` prints loaded model, schema version, api running.
@@ -668,7 +676,7 @@ llm-engine migrate [--db PATH]
 
 ## Information Architecture
 
-One `QMainWindow`. Standard titlebar. Title = conversation title or “LLM Manager”. No hidden titlebar, no hole-punch `paintEvent`.
+One `QMainWindow` with native window controls. Title = conversation title or “Orchevian”. The sidebar spans the full content height, with a plus button on its Projects heading; the downloads toolbar belongs to the right workspace. The standard native titlebar and resizable frame remain intact on all platforms; expanded client-area and transparent-titlebar hints are not used. Private Chat hides sidebar and toolbar until explicitly cleared, while the native window controls remain available.
 
 ```mermaid
 flowchart TB
@@ -676,18 +684,16 @@ flowchart TB
     subgraph col1["Unified sidebar · 280px"]
       N1["New conversation · New project"]
       S1["Chats"]
-      S2["  All conversations"]
       S3["  Projects"]
-      S4["  Ungrouped"]
       S5["Models"]
       L1["Search"]
       L3["Conversation rows"]
       S6["Settings"]
     end
     subgraph col3["Workspace"]
-      T1["Chat title · Model picker · Chat settings"]
+      T1["Chat title · Chat settings"]
       T2["Centered transcript or conversation starters"]
-      T3["Integrated composer · Keyboard hint"]
+      T3["Rounded composer · Model picker · Send"]
       T4["Optional chat settings panel"]
     end
   end
@@ -716,7 +722,7 @@ Selecting Models opens a full library workspace: search and backend-grouped rows
 | Ctrl/⌘, | Settings |
 | Ctrl/⌘1 | Chats |
 | Ctrl/⌘2 | Models |
-| Ctrl/⌘3 | Second brain |
+| Ctrl/⌘3 | Second Brain |
 | Ctrl/⌘L | Focus composer |
 | Ctrl/⌘F | Focus list search |
 | Return | Send (Shift+Return = newline); Settings can flip to Ctrl/⌘+Return |
@@ -726,7 +732,7 @@ Selecting Models opens a full library workspace: search and backend-grouped rows
 
 **New chat:** Ctrl/⌘N. If a project is selected, seed instructions + default model. No scavenger hunt for an empty “New Chat”. Title stays `"New Chat"` until first send.
 
-**Settings window:** General (appearance, Return-to-send), Models (`config.get/set`, rescan, reveal in file manager), API (PR 12b), Advanced (db path read-only, Open engine log). Not an in-app mode menu.
+**Settings workspace:** General (appearance, Return-to-send), Models (`config.get/set`, rescan, reveal in file manager), API (PR 12b), Advanced (db path read-only, Open engine log). Opened through the sidebar or keyboard shortcut; Back to chats returns to the chat area.
 
 **Empty states:** no models → “Open Models” + Ollama-down reason; project with no chats → “New Chat in {project}”.
 
@@ -756,7 +762,7 @@ Implemented as `llm_manager_app/tokens.py` plus a **small** QSS string (object n
 
 Type: system UI font (`.AppleSystemUIFont` / Segoe UI / system); SF Mono / Consolas / ui-monospace for metrics. **No serif.** No slogans.
 
-Layout: default 1280×800, min 1024×680. Reading container capped at 840px with adaptive outer space. Radii 8px controls, 14px composer; send button 32px. Primary and secondary text have at least 4.5:1 contrast against the main surfaces in both themes.
+Layout: default 1280×800, min 1024×680. Reading container capped at 820px with adaptive outer space. Radii 12px controls, 26px composer; send button 34px. Primary and secondary text have at least 4.5:1 contrast against the main surfaces in both themes.
 
 **Streaming caret:** 2×14px accent rect at the end of the assistant buffer; pulse unless the OS reduce-motion hint is set. During the turn: plain text. On `done`: markdown via the `markdown` package into `QTextBrowser` (fenced code on `elevated`). Do not rebuild HTML every 80ms. Do not use nested `<table>` bubbles.
 
@@ -771,7 +777,7 @@ No compatibility with old PySide6 widgets. Compatibility with `data.db` and Open
 | GET | `/v1/models` | Catalog. `id` is `backend/name`. |
 | POST | `/v1/chat/completions` | Chat. Stream supported. |
 
-CLI is new: `llm-manager` (GUI), `llm-engine` (library commands). Old script `llm-manager = llm_manager:main` launched Qt from the god-object tree — replaced.
+CLI: `orchevian` (GUI), `orchevian-engine` (library commands). Old script `llm-manager = llm_manager:main` launched Qt from the god-object tree — replaced.
 
 ---
 
@@ -791,7 +797,7 @@ Not in SQLite: window frame, theme, last conversation, Return-to-send (`QSetting
 2. **Web UI** — rejected as the desktop GUI.
 3. **HTTP control plane for the GUI** — unnecessary in-process; OpenAI HTTP stays optional and named “API.”
 4. **Keep comparison mode** — out of v1.
-5. **Rename the product** — decided: keep LLM Manager.
+5. **Rename the product** — renamed to Orchevian on 2026-09-11.
 6. **Move data to Application Support / %APPDATA%** — deferred; XDG-style path on all OSes in v1.
 7. **mlx-swift** — rejected; Python-only inference.
 8. **Restyle the old `chat_page.py`** — rejected; that is how we got here.
@@ -817,7 +823,7 @@ No analytics. No accounts. Network: Ollama `127.0.0.1:11434`, Hugging Face when 
 - INFO: load/unload/send/stop/api-start. ERROR: backend failures, not swallowed.
 - `--verbose` → DEBUG, still no prompt bodies.
 - Inspector: chunks/s, elapsed, chunk count.
-- `llm-engine health` dumps loaded model, schema version, api status.
+- `orchevian-engine health` dumps loaded model, schema version, api status.
 - Failures are banners, not crash dialogs for Ollama-down / port-in-use.
 
 ---
@@ -826,7 +832,7 @@ No analytics. No accounts. Network: Ollama `127.0.0.1:11434`, Hugging Face when 
 
 | Event | Behavior |
 | --- | --- |
-| Launch | `uv run llm-manager` → QApplication → construct services (SqliteStore, backends, ChatService) on the main thread, start worker thread idle. |
+| Launch | `uv run orchevian` → QApplication → construct services (SqliteStore, backends, ChatService) on the main thread, start worker thread idle. |
 | Quit | `stop()` generation Event; join worker (timeout 3 s); `api.stop()` `should_exit`; close sqlite; `QApplication.quit`. |
 | Crash in worker | Qt slot `error`; persist path already specified; worker restarted idle; do not auto-resend. |
 | OpenAI thread | Started/stopped from Settings; independent of GUI lifetime except Quit. |
@@ -838,14 +844,14 @@ No pid file, no Unix socket, no `flock`, no Finder spawn, no `scripts/dev.sh` so
 ## Rollout Plan
 
 1. Engine + migration on a **copy** of `data.db` in tests.
-2. **Quit the old Qt app.** `uv run llm-engine migrate` + `chat` / `models` against live DB.
+2. **Quit the old Qt app.** `uv run orchevian-engine migrate` + `chat` / `models` against live DB.
 3. PySide6 shell (PR 8) with no inference.
 4. Streaming chat on Ollama (PR 9b).
 5. Projects, Settings, Models inspector.
 6. API start/stop with `curl` + Settings → API tab.
-7. Daily-drive `uv run llm-manager`. Old Qt **left installed**.
+7. Daily-drive `uv run orchevian`. Old Qt **left installed**.
 
-**v1 cut-over:** `uv run llm-manager` on at least macOS (this machine) and documented on Windows/Linux; Ollama chat on migrated `data.db`; old Qt remains rollback. Bundled runtime is v1.1 (PyInstaller/briefcase), not a gate.
+**v1 cut-over:** `uv run orchevian` on at least macOS (this machine) and documented on Windows/Linux; Ollama chat on migrated `data.db`; old Qt remains rollback. Bundled runtime is v1.1 (PyInstaller/briefcase), not a gate.
 
 **Rollback:** quit new app, open old app (after WAL checkpoint). 002 is additive. Restore `data.db.bak-pre-engine` if needed.
 
@@ -870,7 +876,7 @@ Seth confirmed on **2026-09-02** (and reversed Swift the same day):
 
 | # | Question | Decision |
 | --- | --- | --- |
-| 1 | Product name | **LLM Manager** for v1 (K3). |
+| 1 | Product name | **Orchevian** for v1 (K3). |
 | 2 | Composer send key | **Return sends**, Shift+Return newline. Settings can flip (K23). |
 | 3 | OpenAI API UI | Engine endpoint in **PR 6** + Settings → API tab in **PR 12b**. No Server page (K16). |
 | 4 | Templates | **Hide from the sidebar until PR 14.** Not a v1 blocker (K16). |
@@ -951,7 +957,7 @@ Each PR is independently reviewable and mergeable. First PRs are engine + data, 
 - **Title:** `chore: scaffold llm_engine package and repo`
 - **Files:** `pyproject.toml`, `src/llm_engine/{__init__,__main__,config,cli,logging}.py`, `src/llm_engine/domain/{models,chat,errors}.py`, `README.md`, `.gitignore`, `tests/test_domain.py`, `tests/test_config.py`, `tests/test_engine_no_pyside.py`
 - **Depends on:** none
-- **Description:** uv project, Python ≥3.13, ruff + pytest. Domain dataclasses including `LoadOptions.n_ctx` and lowercase presets. `config.json` load/save for `model_dir` + `api_port`; db path via flags/env defaulting to `~/.local/share/llm-manager/data.db` on all OSes. CLI stub `llm-engine --help`. Core deps do **not** include PySide6. No `pyqt-liquidglass`. Test fails if `llm_engine` imports PySide6.
+- **Description:** uv project, Python ≥3.13, ruff + pytest. Domain dataclasses including `LoadOptions.n_ctx` and lowercase presets. `config.json` load/save for `model_dir` + `api_port`; db path via flags/env defaulting to `~/.local/share/llm-manager/data.db` on all OSes. CLI stub `orchevian-engine --help`. Core deps do **not** include PySide6. No `pyqt-liquidglass`. Test fails if `llm_engine` imports PySide6.
 
 ### PR 2 — SQLite store, migrations, no eager message load
 
@@ -965,7 +971,7 @@ Each PR is independently reviewable and mergeable. First PRs are engine + data, 
 - **Title:** `feat: inference protocol and Ollama backend`
 - **Files:** `src/llm_engine/backends/{protocol.py,registry.py,ollama.py,fake.py}`, `tests/test_ollama.py`, `tests/test_registry.py`
 - **Depends on:** PR 1
-- **Description:** Protocol with `is_available`, `load(options)`, `stream_generate` honoring cancel. Ollama at `127.0.0.1:11434`; cancel = `response.close()`. `FakeBackend` yields chunks, can block in generate/load, can yield-once-then-raise. Registry does not swallow. `llm-engine models`. Parallel with PR 2.
+- **Description:** Protocol with `is_available`, `load(options)`, `stream_generate` honoring cancel. Ollama at `127.0.0.1:11434`; cancel = `response.close()`. `FakeBackend` yields chunks, can block in generate/load, can yield-once-then-raise. Registry does not swallow. `orchevian-engine models`. Parallel with PR 2.
 
 ### PR 4 — MLX extra + GGUF extra + ModelSession
 
@@ -981,9 +987,9 @@ Each PR is independently reviewable and mergeable. First PRs are engine + data, 
 - **Depends on:** PR 2, PR 4
 - **Description:** Assemble system prompt at generate time; txn 1 user+retitle / txn 2 assistant; `DEFAULT_TITLES` + ellipsis; project seed; regenerate/stop edges; exception ≥1 chunk → flush tokens, persist partial, only error; 0 chunks → no row; coalesce 40 ms / 32, flush before any terminal; one-at-a-time lock; `list_conversations` during blocked generate does not raise.
 
-### PR 5b — `llm-engine chat` TTY
+### PR 5b — `orchevian-engine chat` TTY
 
-- **Title:** `feat: llm-engine chat TTY client`
+- **Title:** `feat: orchevian-engine chat TTY client`
 - **Files:** `src/llm_engine/cli.py`, `tests/test_cli_chat.py`
 - **Depends on:** PR 5
 - **Description:** In-process ChatService + FakeBackend/Ollama. Streaming stdout, Ctrl-C → stop. K15 fallback.
@@ -993,7 +999,7 @@ Each PR is independently reviewable and mergeable. First PRs are engine + data, 
 - **Title:** `feat: OpenAI-compatible API lifecycle`
 - **Files:** `src/llm_engine/services/openai_api.py`, `tests/test_openai_api.py`
 - **Depends on:** PR 5
-- **Description:** `/v1/models`, `/v1/chat/completions`. `uvicorn.Server.should_exit`. Bind `127.0.0.1` only. Busy → 429. `llm-engine serve`. Lifecycle test: start then stop actually refuses connections.
+- **Description:** `/v1/models`, `/v1/chat/completions`. `uvicorn.Server.should_exit`. Bind `127.0.0.1` only. Busy → 429. `orchevian-engine serve`. Lifecycle test: start then stop actually refuses connections.
 
 ### PR 7 — Hugging Face hub
 
@@ -1007,7 +1013,7 @@ Each PR is independently reviewable and mergeable. First PRs are engine + data, 
 - **Title:** `feat(app): QMainWindow three-column shell`
 - **Files:** `src/llm_manager_app/{__init__,__main__,main_window,tokens}.py`, `src/llm_manager_app/widgets/sidebar.py`, `pyproject.toml` (GUI extra/deps: PySide6), script `llm-manager`
 - **Depends on:** PR 5
-- **Description:** `uv run llm-manager` opens a window. QSplitter: sidebar (Chats / Models), empty list, empty detail. Studio tokens + small QSS. Standard titlebar. **No inference, no sqlite in the GUI package, no HTML bubbles, no liquid glass.** Column 3 can show `CatalogService.status` / health text to prove imports. Gate: PR 5 must exist.
+- **Description:** `uv run orchevian` opens a window. QSplitter: sidebar (Chats / Models), empty list, empty detail. Studio tokens + small QSS. Standard titlebar. **No inference, no sqlite in the GUI package, no HTML bubbles, no liquid glass.** Column 3 can show `CatalogService.status` / health text to prove imports. Gate: PR 5 must exist.
 
 ### PR 9a — Conversation list + CRUD
 
@@ -1077,4 +1083,4 @@ Each PR is independently reviewable and mergeable. First PRs are engine + data, 
 - **Title:** `chore: v1 polish and cut over`
 - **Files:** menus, shortcuts, copy, README
 - **Depends on:** PR 9c, 10, 11, 12
-- **Description:** Meet cut-over: `uv run llm-manager`, Ollama chat on migrated `data.db`, old Qt **left installed**. No bundled runtime gate. Do not delete `data.db`.
+- **Description:** Meet cut-over: `uv run orchevian`, Ollama chat on migrated `data.db`, old Qt **left installed**. No bundled runtime gate. Do not delete `data.db`.

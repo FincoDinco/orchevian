@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication, QStyleFactory, QWidget
@@ -20,33 +21,33 @@ class StudioPalette:
     selection: str
     separator: str
     sidebar: str
-    radius_control: int = 8
-    radius_composer: int = 14
+    radius_control: int = 12
+    radius_composer: int = 26
 
 
 # DESIGN.md Visual System — Studio
 DARK = StudioPalette(
-    canvas="#1B1D22",
-    elevated="#25282F",
-    text="#EDEEF2",
-    secondary="#9A9FAA",
-    accent="#8CA9FF",
+    canvas="#181818",
+    elevated="#282828",
+    text="#E8E8E8",
+    secondary="#969696",
+    accent="#6E9EE8",
     danger="#FF453A",
-    selection="rgba(140, 169, 255, 32)",
-    separator="rgba(255, 255, 255, 22)",
-    sidebar="#15171B",
+    selection="rgba(255, 255, 255, 20)",
+    separator="rgba(255, 255, 255, 16)",
+    sidebar="#232323",
 )
 
 LIGHT = StudioPalette(
-    canvas="#FAFAF8",
+    canvas="#FAFAFC",
     elevated="#FFFFFF",
-    text="#252830",
-    secondary="#666B76",
-    accent="#4467C4",
+    text="#1D1D1F",
+    secondary="#636366",
+    accent="#0066CC",
     danger="#FF3B30",
     selection="rgba(68, 103, 196, 24)",
     separator="rgba(0, 0, 0, 20)",
-    sidebar="#EFF0ED",
+    sidebar="#EFEFF2",
 )
 
 _CURRENT: StudioPalette | None = None
@@ -106,7 +107,12 @@ def qss(palette: StudioPalette) -> str:
     family = system_font_family()
     mono = mono_font_family()
     r = palette.radius_control
+    chevron = (Path(__file__).parent / "assets" / "chevron-down.svg").as_posix()
     return f"""
+    QWidget#privateChatBanner {{
+        background: {palette.elevated}; border: 2px solid {palette.accent};
+        border-radius: 12px;
+    }}
     QMainWindow, QDialog, QWidget#shell {{
         background-color: {palette.canvas}; color: {palette.text}; font-family: "{family}";
     }}
@@ -114,12 +120,32 @@ def qss(palette: StudioPalette) -> str:
     QWidget#sidebar, QTreeView#sidebarNav {{
         background-color: {palette.sidebar}; color: {palette.text}; border: none; outline: none;
     }}
+    QScrollArea {{ border: none; background: {palette.canvas}; }}
+    QToolBar#workspaceToolbar {{ background: {palette.canvas}; border: none;
+        spacing: 8px; padding: 4px 12px; }}
+    QToolBar#workspaceToolbar QToolButton {{ background: transparent; border: none;
+        border-radius: {r}px; padding: 5px; min-width: 24px; min-height: 24px; }}
+    QToolBar#workspaceToolbar QToolButton:hover,
+    QToolBar#workspaceToolbar QToolButton:checked {{ background: {palette.selection}; }}
+    QFrame#downloadsPopover {{ background: {palette.elevated};
+        border: 1px solid {palette.separator}; border-radius: 16px; }}
+    QFrame#downloadsPopover QScrollArea, QFrame#downloadsPopover QScrollArea > QWidget > QWidget {{
+        background: {palette.elevated}; }}
+    QWidget#downloadCard {{ background: transparent;
+        border: none; border-bottom: 1px solid {palette.separator}; }}
+    QLabel#downloadDetails {{ color: {palette.secondary}; padding: 4px 26px; }}
+    QToolButton#modelDetailsDisclosure {{ color: {palette.secondary}; border: none;
+        background: transparent; padding: 6px 0; }}
+    QProgressBar {{ border: none; background: {palette.separator};
+        border-radius: 3px; min-height: 5px; max-height: 5px; }}
+    QProgressBar::chunk {{ background: {palette.accent}; border-radius: 3px; }}
     QWidget#listPane, QListView#conversationView, QListWidget#modelsList,
+    QListWidget#discoveryResults,
     QWidget#detailPane, QWidget#transcript, QWidget#chatBody {{
         background-color: {palette.canvas}; color: {palette.text}; border: none; outline: none;
     }}
     QTreeView#sidebarNav::item {{
-        padding: 7px 10px; margin: 1px 8px; border-radius: {r}px; min-height: 22px;
+        padding: 6px 10px; margin: 1px 8px; border-radius: {r}px; min-height: 22px;
     }}
     QTreeView#sidebarNav::item:hover, QTreeView#sidebarNav::item:selected {{
         background-color: {palette.selection}; color: {palette.text};
@@ -140,18 +166,17 @@ def qss(palette: StudioPalette) -> str:
     }}
     QPushButton {{
         background-color: {palette.elevated}; color: {palette.text};
-        border: 1px solid {palette.separator}; border-radius: {r}px; padding: 8px 12px;
+        border: 1px solid {palette.separator}; border-radius: {r}px; padding: 6px 12px;
     }}
     QPushButton:hover {{ background-color: {palette.selection}; }}
     QPushButton:disabled {{ color: {palette.secondary}; }}
+    QToolButton {{ border: none; border-radius: {r}px; padding: 6px; background: transparent; }}
+    QToolButton:hover {{ background: {palette.selection}; }}
+    QPlainTextEdit {{ background: {palette.elevated}; border: none;
+        border-radius: {r}px; padding: 10px; }}
     QPushButton#newChatButton, QPushButton#openModelsButton,
     QPushButton#regenerateButton, QPushButton#inspectorToggle, QPushButton#inspectorTab {{
-        background-color: transparent; color: {palette.accent}; border: none; padding: 6px 8px;
-    }}
-    QPushButton#newChatButton:hover, QPushButton#openModelsButton:hover,
-    QPushButton#regenerateButton:hover, QPushButton#inspectorToggle:hover,
-    QPushButton#inspectorTab:hover {{
-        background-color: {palette.selection};
+        background-color: transparent; color: {palette.secondary}; border: none; padding: 6px 8px;
     }}
     QPushButton#inspectorToggle:checked, QPushButton#inspectorTab:checked {{
         color: {palette.text};
@@ -161,35 +186,50 @@ def qss(palette: StudioPalette) -> str:
         color: {palette.secondary}; background: transparent;
     }}
     QLabel#lastTurnLabel {{ font-family: "{mono}"; }}
-    QToolButton#sidebarCollapse, QToolButton#inspectorCollapse, QToolButton#newProjectButton {{
+    QToolButton#sidebarCollapse, QToolButton#inspectorCollapse, QToolButton#newProjectButton,
+    QToolButton#sidebarSearch {{
         background: transparent; color: {palette.secondary}; border: none; padding: 4px;
     }}
+    QToolButton#thinkingDisclosure, QToolButton#advancedDisclosure {{
+        background: transparent; color: {palette.secondary}; border: none;
+        padding: 6px 10px; border-radius: {r}px;
+    }}
+    QToolButton#thinkingDisclosure:hover, QToolButton#advancedDisclosure:hover {{
+        background: {palette.selection}; color: {palette.text};
+    }}
+    QPlainTextEdit#thinkingBody {{ background: {palette.elevated}; color: {palette.secondary};
+        border: none; border-radius: {r}px; padding: 10px; }}
     QToolButton#sidebarCollapse:hover, QToolButton#inspectorCollapse:hover {{
         background-color: {palette.selection}; color: {palette.text};
     }}
-    QToolButton#modelPicker {{
-        background: transparent; color: {palette.text}; border: none;
+    QToolButton#modelPicker, QToolButton#projectHomeModelPicker {{
+        background: transparent; color: {palette.secondary}; border: none;
         padding: 6px 10px; border-radius: {r}px;
     }}
-    QToolButton#modelPicker:hover, QToolButton#modelPicker:pressed {{
+    QToolButton#modelPicker:hover, QToolButton#projectHomeModelPicker:hover,
+    QToolButton#modelPicker:pressed, QToolButton#projectHomeModelPicker:pressed {{
         background-color: {palette.selection};
     }}
+    QToolButton#modelPicker::menu-indicator, QToolButton#projectHomeModelPicker::menu-indicator {{
+        subcontrol-position: right center; right: 1px; }}
     QTextBrowser#transcriptHistory, QPlainTextEdit#transcriptStream {{
         background-color: {palette.canvas}; color: {palette.text}; border: none;
+        font-size: 16px;
     }}
-    QPlainTextEdit#composerEdit {{
+    QPlainTextEdit#composerEdit, QPlainTextEdit#projectComposerEdit {{
         background-color: transparent; color: {palette.text};
-        border: none; padding: 4px; font-size: 14px;
+        border: none; padding: 4px; font-size: 15px;
     }}
-    QPushButton#sendButton {{
+    QPushButton#sendButton, QPushButton#projectSendButton {{
         background-color: {palette.accent}; color: {palette.canvas};
-        border: none; border-radius: 10px; padding: 0; font-size: 20px; font-weight: 600;
+        border: none; border-radius: 17px; padding: 0; font-size: 20px; font-weight: 600;
     }}
-    QPushButton#sendButton:hover {{ background-color: {palette.accent}; }}
-    QPushButton#sendButton:disabled {{
+    QPushButton#sendButton:hover, QPushButton#projectSendButton:hover {{
+        background-color: {palette.accent}; }}
+    QPushButton#sendButton:disabled, QPushButton#projectSendButton:disabled {{
         background-color: {palette.selection}; color: {palette.secondary};
     }}
-    QPushButton#sendButton[mode="stop"] {{
+    QPushButton#sendButton[mode="stop"], QPushButton#projectSendButton[mode="stop"] {{
         background-color: {palette.danger}; color: #FFFFFF; border-radius: 6px;
     }}
     QLabel#chatBanner, QLabel#settingsError, QLabel#modelsError, QLabel#modelsBanner {{
@@ -197,7 +237,7 @@ def qss(palette: StudioPalette) -> str:
         border-radius: {r}px; padding: 8px 10px;
     }}
     QWidget#inspector {{
-        background-color: {palette.elevated}; color: {palette.text}; border: none;
+        background: {palette.elevated}; color: {palette.text}; border: none; border-radius: 16px;
     }}
     QPushButton#presetPrecise, QPushButton#presetBalanced, QPushButton#presetCreative {{
         background-color: {palette.canvas}; color: {palette.secondary};
@@ -208,7 +248,7 @@ def qss(palette: StudioPalette) -> str:
         background-color: {palette.selection}; color: {palette.text};
     }}
     QPushButton#unloadButton, QPushButton#restartButton {{ color: {palette.danger}; }}
-    QPushButton#loadButton, QPushButton#chatButton {{
+    QPushButton#chatButton {{
         background-color: {palette.accent}; color: {palette.canvas};
     }}
     QPushButton#unloadButton:disabled, QPushButton#restartButton:disabled {{
@@ -228,10 +268,13 @@ def qss(palette: StudioPalette) -> str:
     QMenu::item:selected {{ background-color: {palette.selection}; }}
     QMenu::separator {{ height: 1px; background: {palette.separator}; margin: 4px 8px; }}
     QTabWidget::pane {{ border: none; background: {palette.canvas}; }}
+    QTabBar {{ background: {palette.sidebar}; border-radius: {r}px; }}
     QTabBar::tab {{
-        background: transparent; color: {palette.secondary}; padding: 8px 14px; border: none;
+        background: transparent; color: {palette.secondary}; padding: 6px 16px;
+        border: 1px solid transparent; border-radius: 10px; margin: 3px;
     }}
-    QTabBar::tab:selected {{ color: {palette.text}; border-bottom: 2px solid {palette.accent}; }}
+    QTabBar::tab:selected {{ color: {palette.text}; background: {palette.elevated};
+        border: 1px solid {palette.separator}; }}
     QHeaderView::section, QAbstractItemView {{
         background-color: {palette.canvas}; color: {palette.text}; outline: none; border: none;
     }}
@@ -247,46 +290,61 @@ def qss(palette: StudioPalette) -> str:
     }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
     QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: none; }}
-    QComboBox::drop-down {{ border: none; width: 20px; }}
+    QComboBox::drop-down {{ border: none; width: 28px; }}
+    QComboBox::down-arrow {{ image: url("{chevron}"); width: 14px; height: 14px; }}
     QComboBox QAbstractItemView {{
         background-color: {palette.elevated}; color: {palette.text};
-        selection-background-color: {palette.selection}; border: none;
+        selection-background-color: {palette.selection}; border: none; border-radius: {r}px;
     }}
+    QComboBox QAbstractItemView::item {{ padding: 6px 8px; border-radius: 8px; }}
     QCheckBox {{ color: {palette.text}; spacing: 8px; }}
     QToolTip {{
         background-color: {palette.elevated}; color: {palette.text};
         border: none; padding: 4px 8px;
     }}
-    QWidget#chatToolbar {{ background: transparent; border-bottom: 1px solid {palette.separator}; }}
+    QWidget#chatToolbar {{ background: transparent; border: none; }}
     QWidget#sidebar QWidget#listPane, QWidget#sidebar QListView#conversationView {{
         background: {palette.sidebar};
     }}
-    QLabel#brandTitle {{ font-size: 16px; font-weight: 600; letter-spacing: -0.3px; }}
+    QLabel#brandTitle {{ font-size: 19px; font-weight: 600; letter-spacing: -0.3px; }}
+    QLabel#sidebarSection {{ color: {palette.secondary}; padding: 0 14px 2px;
+        font-size: 14px; }}
+    QLabel#sidebarStatus {{ color: {palette.secondary}; font-size: 12px; }}
+    QWidget#sidebarFooter {{ border-top: 1px solid {palette.separator}; }}
+    QTreeView#sidebarNav, QListView#conversationView {{ font-size: 14px; }}
     QLabel#eyebrow {{ color: {palette.secondary}; font-size: 10px;
         font-weight: 600; letter-spacing: 1px; }}
-    QLabel#chatTitle {{ font-size: 14px; font-weight: 600; }}
-    QLabel#pageTitle {{ font-size: 26px; font-weight: 600; letter-spacing: -0.6px; }}
-    QLabel#modelTitle {{ font-size: 24px; font-weight: 600; letter-spacing: -0.5px; }}
+    QLabel#chatTitle {{ color: {palette.secondary}; font-size: 14px; font-weight: 400; }}
+    QLabel#pageTitle {{ font-size: 18px; font-weight: 600; letter-spacing: -0.2px; }}
+    QLabel#modelTitle {{ font-size: 20px; font-weight: 600; letter-spacing: -0.3px; }}
     QLabel#pageSubtitle, QLabel#welcomeSubtitle {{ color: {palette.secondary}; font-size: 13px; }}
     QLabel#welcomeTitle {{ font-size: 28px; font-weight: 600; letter-spacing: -0.8px; }}
-    QLabel#welcomeMark {{ color: {palette.accent}; font-size: 56px; }}
     QLabel#chatEmpty {{ font-size: 14px; }}
-    QLabel#composerHint, QLabel#composerNote {{ color: {palette.secondary}; font-size: 11px; }}
-    QWidget#composer {{ background: {palette.elevated}; border: 1px solid {palette.separator};
+    QWidget#projectGuidanceCard {{ background: {palette.elevated};
+        border: 1px solid {palette.separator}; border-radius: {r}px; }}
+    QListWidget#projectConversations {{ background: transparent; border: none; }}
+    QListWidget#projectConversations::item {{ padding: 8px 12px; border-radius: {r}px; }}
+    QListWidget#projectConversations::item:hover {{ background: {palette.selection}; }}
+    QWidget#composer, QWidget#projectComposer {{
+        background: {palette.elevated}; border: 1px solid {palette.separator};
         border-radius: {palette.radius_composer}px; }}
-    QPushButton#sidebarNewChat {{ background: {palette.elevated};
-        text-align: left; padding: 10px 12px; }}
+    QPushButton#sidebarNewChat {{ background: transparent; border: none;
+        text-align: left; padding: 8px 10px; font-size: 14px; }}
+    QPushButton#sidebarNewChat:hover {{ background: {palette.selection}; }}
     QPushButton#sidebarSettings {{ background: transparent; border: none; padding: 6px; }}
-    QPushButton#welcomeNewChat {{ background: {palette.accent};
+    QPushButton#welcomeNewChat, QPushButton#primaryButton {{ background: {palette.accent};
         color: {palette.canvas}; border: none; }}
+    QPushButton#primaryButton:disabled {{ background: {palette.selection};
+        color: {palette.secondary}; }}
     QPushButton#starterButton {{ text-align: left; padding: 12px 16px; background: transparent; }}
     QPushButton#starterButton:hover {{ background: {palette.elevated};
         border-color: {palette.accent}; }}
     QLabel#catalogEmpty {{ color: {palette.secondary}; padding: 8px; }}
-    QWidget#modelFacts {{ background: {palette.elevated}; border-radius: 10px; }}
+    QWidget#modelFacts {{ background: {palette.elevated}; border-radius: 16px; }}
     QLabel#factValue {{ font-size: 18px; font-weight: 600; }}
     QLabel#modelsDetailBody {{ color: {palette.secondary}; line-height: 1.6; }}
-    QLineEdit:focus, QPushButton:focus, QToolButton:focus {{ border: 1px solid {palette.accent}; }}
+    QLineEdit:focus, QPushButton:focus, QToolButton:focus, QComboBox:focus,
+    QSpinBox:focus, QDoubleSpinBox:focus {{ border: 1px solid {palette.accent}; }}
     """
 
 
@@ -343,8 +401,10 @@ def apply_studio(
             palette = DARK
         else:
             palette = palette_for_app(app)
-    if "Fusion" in QStyleFactory.keys():
-        app.setStyle("Fusion")
+    styles = {name.lower(): name for name in QStyleFactory.keys()}
+    preferred = "macintosh" if sys.platform == "darwin" else "fusion"
+    if preferred in styles:
+        app.setStyle(styles[preferred])
     font = QFont(system_font_family())
     font.setPixelSize(13)
     app.setFont(font)

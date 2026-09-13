@@ -50,9 +50,19 @@ def _model_columns(model: ModelRef | None) -> tuple[str, str]:
     return model.name, str(model.backend)
 
 
+def resolve_new_chat_model(
+    explicit: ModelRef | None,
+    project_default: ModelRef | None,
+    app_default: ModelRef | None,
+) -> ModelRef | None:
+    """Resolve preferences without substituting a different unavailable model."""
+    return explicit or project_default or app_default
+
+
 class LibraryService:
-    def __init__(self, store: SqliteStore) -> None:
+    def __init__(self, store: SqliteStore, *, default_model: ModelRef | None = None) -> None:
         self._store = store
+        self.default_model = default_model
 
     def list_conversations(
         self,
@@ -111,12 +121,13 @@ class LibraryService:
     ) -> Conversation:
         now = _now()
         system_prompt = ""
+        project_model = None
         resolved_project: int | None = project_id
         if project_id is not None:
             project = self._get_project_row(project_id)
             system_prompt = project.instructions
-            if model is None:
-                model = project.default_model
+            project_model = project.default_model
+        model = resolve_new_chat_model(model, project_model, self.default_model)
         model_name, backend = _model_columns(model)
         with self._store.transaction() as conn:
             cur = conn.execute(

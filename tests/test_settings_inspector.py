@@ -24,7 +24,7 @@ def _qapp():
 
     app = QApplication.instance()
     if app is None:
-        app = QApplication(["llm-manager-tests"])
+        app = QApplication(["orchevian-tests"])
     return app
 
 
@@ -104,7 +104,7 @@ def test_studio_qss_covers_inspector_and_settings() -> None:
     from llm_manager_app.tokens import DARK, qss
 
     sheet = qss(DARK)
-    assert len(sheet.splitlines()) < 220
+    assert len(sheet) < 16_000
     assert "inspector" in sheet
     assert "QDialog" in sheet
 
@@ -496,7 +496,9 @@ def test_shortcuts_sheet_lists_design_keys(tmp_path: Path) -> None:
         assert "Delete conversation" in joined
         window._open_settings()
         app.processEvents()
-        settings = window.findChild(QDialog, "settingsDialog")
+        from PySide6.QtWidgets import QWidget
+
+        settings = window.findChild(QWidget, "settingsDialog")
         assert settings is not None
         tabs = settings.findChild(QTabWidget, "settingsTabs")
         assert tabs is not None and tabs.count() == 3

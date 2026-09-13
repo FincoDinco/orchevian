@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from collections.abc import Iterator
 from datetime import datetime
@@ -21,8 +22,12 @@ from llm_engine.domain.models import (
     LocalModel,
     ModelRef,
 )
+from llm_engine.hardware import GIB, detect_hardware
 
-_UNAVAILABLE = "GGUF requires extra 'gguf' (llama-cpp-python)"
+_UNAVAILABLE = (
+    "GGUF runtime missing (llama-cpp-python). "
+    "Run: uv sync --extra gui --extra gguf (add --extra mlx on Apple Silicon)."
+)
 
 
 def _module_available(name: str) -> bool:
@@ -41,8 +46,22 @@ def _handle_runtime(handle: LoadedHandle) -> object:
     return runtime
 
 
+def _model_files(path: Path) -> list[Path]:
+    match = re.fullmatch(r"(.+)-(\d{5})-of-(\d{5})(\.gguf)", path.name, re.I)
+    if match is None:
+        return [path]
+    if int(match[2]) != 1:
+        return []
+    count = int(match[3])
+    return [
+        path.with_name(f"{match[1]}-{index:05d}-of-{count:05d}{match[4]}")
+        for index in range(1, count + 1)
+    ]
+
+
 class GGUFBackend:
     name = BackendName.GGUF
+    supports_offline_catalog = True
 
     def __init__(self, model_dir: Path | None = None) -> None:
         self._model_dir = Path(model_dir) if model_dir is not None else default_model_dir() / "gguf"
@@ -53,21 +72,26 @@ class GGUFBackend:
         return True, None
 
     def list_models(self) -> list[LocalModel]:
-        ok, reason = self.is_available()
-        if not ok:
-            raise EngineError("backend_unavailable", reason or _UNAVAILABLE)
         if not self._model_dir.is_dir():
             return []
         models: list[LocalModel] = []
-        for path in sorted(self._model_dir.glob("*.gguf")):
-            if not path.is_file():
+        for path in sorted(self._model_dir.rglob("*")):
+            if path.suffix.lower() != ".gguf" or not path.is_file():
+                continue
+            if any(part.startswith(".") for part in path.relative_to(self._model_dir).parts):
+                continue
+            files = _model_files(path)
+            if not files or not all(file.is_file() for file in files):
                 continue
             stat = path.stat()
             models.append(
                 LocalModel(
-                    ref=ModelRef(BackendName.GGUF, path.stem),
+                    ref=ModelRef(
+                        BackendName.GGUF,
+                        path.relative_to(self._model_dir).with_suffix("").as_posix(),
+                    ),
                     path=path,
-                    size_bytes=stat.st_size,
+                    size_bytes=sum(file.stat().st_size for file in files),
                     modified_at=datetime.fromtimestamp(stat.st_mtime),
                     details={"file": path.name},
                 )
@@ -83,11 +107,19 @@ class GGUFBackend:
         if path is None or not path.is_file():
             raise EngineError("load_failed", f"GGUF model not found: {model.ref.name}")
         try:
-            from llama_cpp import Llama
-        except ImportError as exc:
-            raise EngineError("backend_unavailable", _UNAVAILABLE) from exc
+            import llama_cpp
+        except (ImportError, OSError) as exc:
+            raise EngineError("backend_unavailable", f"GGUF could not start: {exc}") from exc
         try:
-            llama = Llama(model_path=str(path), n_ctx=opts.n_ctx, verbose=False)
+            supports_gpu = getattr(llama_cpp, "llama_supports_gpu_offload", lambda: False)
+            gpu_budget = detect_hardware().gpu_budget if supports_gpu() else None
+            # CPU-fit recommendations must not blindly offload onto a smaller GPU.
+            required = int(model.size_bytes * 1.2) + 2 * GIB
+            gpu_layers = -1 if gpu_budget is not None and required <= gpu_budget else 0
+            llama = llama_cpp.Llama(
+                model_path=str(path), n_ctx=opts.n_ctx,
+                n_gpu_layers=gpu_layers, verbose=False,
+            )
         except EngineError:
             raise
         except Exception as exc:
@@ -148,8 +180,20 @@ class GGUFBackend:
             raise EngineError("not_found", f"GGUF model not found: {model.ref.name}")
         path = model.path.resolve()
         root = self._model_dir.resolve()
-        if not path.is_relative_to(root):
+        if path == root or not path.is_relative_to(root):
             raise EngineError("load_failed", "refusing to delete path outside model dir")
         if not path.is_file():
             raise EngineError("not_found", f"GGUF model not found: {model.ref.name}")
-        path.unlink()
+        files = _model_files(path)
+        if not files or any(not file.resolve().is_relative_to(root) for file in files):
+            raise EngineError("load_failed", "refusing to delete invalid model shards")
+        for file in files:
+            file.unlink(missing_ok=True)
+        # Remove empty download folders so the same model can be installed again.
+        parent = path.parent
+        while parent != root:
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent

@@ -88,6 +88,10 @@ class ProcessBackend:
     def list_models(self) -> list[LocalModel]:
         return self.catalog.list_models()
 
+    @property
+    def supports_offline_catalog(self) -> bool:
+        return bool(getattr(self.catalog, "supports_offline_catalog", False))
+
     def delete(self, model: LocalModel) -> None:
         self.catalog.delete(model)
 

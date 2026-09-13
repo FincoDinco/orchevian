@@ -57,11 +57,11 @@ class Inspector(QWidget):
         self._generating = False
         self._unload_offered = False
 
-        prompt_label = QLabel("System prompt", self)
+        prompt_label = QLabel("Chat guidance", self)
         prompt_label.setObjectName("inspectorSection")
         self._prompt = QPlainTextEdit(self)
         self._prompt.setObjectName("systemPromptEdit")
-        self._prompt.setPlaceholderText("Instructions for this conversation")
+        self._prompt.setPlaceholderText("What should your AI keep in mind for this chat?")
         self._prompt.setTabChangesFocus(True)
         self._prompt.setFixedHeight(96)
         self._prompt.textChanged.connect(self._on_prompt_edited)
@@ -71,7 +71,7 @@ class Inspector(QWidget):
         self._prompt_timer.setInterval(250)
         self._prompt_timer.timeout.connect(self._emit_prompt)
 
-        generation_label = QLabel("Generation", self)
+        generation_label = QLabel("Response style", self)
         generation_label.setObjectName("inspectorSection")
         preset_row = QGridLayout()
         preset_row.setContentsMargins(0, 0, 0, 0)
@@ -175,9 +175,25 @@ class Inspector(QWidget):
         body_layout.addWidget(self._prompt)
         body_layout.addWidget(generation_label)
         body_layout.addLayout(preset_row)
-        body_layout.addLayout(sampling)
-        body_layout.addWidget(last_label)
-        body_layout.addWidget(self._last_turn)
+        advanced = QWidget(self)
+        advanced_layout = QVBoxLayout(advanced)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.addLayout(sampling)
+        advanced_layout.addWidget(last_label)
+        advanced_layout.addWidget(self._last_turn)
+        advanced.hide()
+        self._advanced_toggle = QToolButton(self)
+        self._advanced_toggle.setObjectName("advancedDisclosure")
+        self._advanced_toggle.setText("Advanced controls")
+        self._advanced_toggle.setCheckable(True)
+        self._advanced_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._advanced_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self._advanced_toggle.toggled.connect(advanced.setVisible)
+        self._advanced_toggle.toggled.connect(lambda expanded: self._advanced_toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        ))
+        body_layout.addWidget(self._advanced_toggle)
+        body_layout.addWidget(advanced)
         body_layout.addLayout(stuck)
         body_layout.addStretch(1)
 

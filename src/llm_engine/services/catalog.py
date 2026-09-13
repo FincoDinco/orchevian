@@ -24,5 +24,8 @@ class CatalogService:
     def unload(self) -> None:
         self._session.unload()
 
+    def delete(self, ref: ModelRef) -> None:
+        self._session.delete(ref)
+
     def status(self) -> SessionStatus:
         return self._session.status()

@@ -22,7 +22,7 @@ def _qapp():
 
     app = QApplication.instance()
     if app is None:
-        app = QApplication(["llm-manager-tests"])
+        app = QApplication(["orchevian-tests"])
     return app
 
 
@@ -198,12 +198,12 @@ def test_models_view_groups_by_backend_and_banners(tmp_path: Path) -> None:
             assert item is not None
             labels.append(item.text())
         assert labels[0] == "Ollama"
-        assert "llama" in labels
+        assert "Llama" in labels
         assert "MLX" in labels
         assert "Unavailable" in labels
         assert "GGUF" in labels
-        assert "tiny" in labels
-        assert labels.index("Ollama") < labels.index("MLX") < labels.index("GGUF")
+        assert "Tiny" in labels
+        assert labels.index("Ollama") < labels.index("GGUF") < labels.index("MLX")
         banner = view.findChild(QLabel, "modelsBanner")
         assert banner is not None
         assert "MLX requires macOS Apple Silicon and extra 'mlx'" in banner.text()
@@ -362,7 +362,7 @@ def test_main_window_models_section_swaps_panes(tmp_path: Path) -> None:
     try:
         assert window._detail_stack.currentWidget() is window._chat_view
         _trigger(window._models.job_finished, lambda: window._sidebar.select_section(MODELS))
-        assert window.windowTitle() == "Models — LLM Manager"
+        assert window.windowTitle() == "Models — Orchevian"
         assert window._detail_stack.currentWidget() is window._models
         assert window._models.isAncestorOf(window._models.detail)
         banner = window.findChild(QLabel, "modelsBanner")
@@ -372,7 +372,7 @@ def test_main_window_models_section_swaps_panes(tmp_path: Path) -> None:
         assert models_list is not None
         texts = [models_list.item(i).text() for i in range(models_list.count())]
         assert texts[0] == "Ollama"
-        assert "llama" in texts
+        assert "Llama" in texts
         window._models.chat_with_selected()
         assert window._sidebar.current_section() == "chats"
         assert window._detail_stack.currentWidget() is window._chat_view
@@ -668,3 +668,183 @@ def test_catalog_service_load_uses_session() -> None:
     assert catalog.status().loaded is not None
     catalog.unload()
     assert catalog.status().loaded is None
+
+
+def test_main_window_delete_confirms_unloads_and_refreshes(tmp_path, monkeypatch):
+    _qapp()
+    from PySide6.QtWidgets import QMessageBox
+
+    from llm_manager_app.widgets.sidebar import MODELS
+
+    backend = FakeBackend(models=[_model(BackendName.OLLAMA, "delete-me")])
+    window, store, library = _window(tmp_path, BackendRegistry([backend]))
+    try:
+        conversation = library.create_conversation(model=backend.list_models()[0].ref)
+        _trigger(window._models.job_finished, lambda: window._sidebar.select_section(MODELS))
+        _trigger(window._models.job_finished, window._models.load_selected)
+        def dismiss(dialog):
+            assert dialog.defaultButton() is dialog.button(QMessageBox.StandardButton.Cancel)
+            assert dialog.escapeButton() is dialog.defaultButton()
+            dialog.button(QMessageBox.StandardButton.Cancel).click()
+
+        monkeypatch.setattr(QMessageBox, "exec", dismiss)
+        window._models.delete_selected()
+        assert backend.delete_calls == []
+
+        def confirm(dialog):
+            delete = next(button for button in dialog.buttons()
+                          if dialog.buttonRole(button) == QMessageBox.ButtonRole.DestructiveRole)
+            assert delete.text() == "Delete Model"
+            delete.click()
+
+        monkeypatch.setattr(QMessageBox, "exec", confirm)
+        _trigger(window._models.refreshed, window._models.delete_selected)
+        assert len(backend.delete_calls) == 1 and len(backend.unload_calls) == 1
+        assert window._models.selected_model() is None
+        assert not window._models._delete_btn.isEnabled()
+        assert library.get_conversation(conversation.summary.id) is not None
+    finally:
+        window.close()
+        store.close()
+
+
+def test_hugging_face_discovery_runs_off_gui_thread_and_recovers(monkeypatch):
+    _qapp()
+    from llm_engine.services.discovery import GIB, Hardware, RemoteModel
+
+    catalog = StubCatalog([], {})
+    view = _view(catalog)
+    hardware = Hardware("Darwin", "arm64", 24 * GIB)
+    monkeypatch.setattr("llm_manager_app.widgets.models_view.detect_hardware", lambda: hardware)
+    calls = []
+
+    class Discovery:
+        fail = True
+
+        def recommend(self, hardware, format, query):
+            calls.append(threading.get_ident())
+            if self.fail:
+                raise EngineError("search_failed", "Check your connection")
+            return [RemoteModel("owner/Tiny-3B", format, 100, 4 * GIB, "Estimated")]
+
+        def search(self, query, format):
+            calls.append(threading.get_ident())
+            return [RemoteModel("owner/Large-70B", format, 100, 80 * GIB, "Estimated")]
+
+    discovery = Discovery()
+    view._discovery_service = discovery
+    try:
+        view.embed_detail()
+        _trigger(view.job_finished, lambda: view._tabs.setCurrentIndex(1))
+        assert "connection" in view._discovery.message.text()
+        assert view._discovery.search.isEnabled()
+        discovery.fail = False
+        _trigger(view.job_finished, view._discovery.search.click)
+        assert calls and all(ident != threading.get_ident() for ident in calls)
+        assert view._discovery.results.count() == 1
+        assert "24 GB" in view._discovery.hardware.text()
+        assert view._discovery.open.isEnabled()
+        _trigger(view.job_finished, lambda: view._discovery.recommended.setChecked(False))
+        assert "Large · 70B" == view._discovery.results.item(0).text()
+    finally:
+        view.close()
+
+
+def test_download_controls_install_and_refresh_library_off_gui_thread(tmp_path):
+    _qapp()
+    from llm_engine.services.discovery import GIB, Hardware, RemoteModel
+    from llm_engine.services.downloads import DownloadChoice, DownloadPlan, HubFile
+
+    backend = FakeBackend(models=[])
+    window, store, _ = _window(tmp_path, BackendRegistry([backend]))
+    view = window._models
+    remote = RemoteModel("owner/Tiny-1B", "gguf", 1, GIB, "Estimated")
+    local = _model(BackendName.OLLAMA, "downloaded")
+    choice = DownloadChoice("Tiny.gguf", (HubFile("Tiny.gguf", 5 * GIB),))
+    plan = DownloadPlan(remote, "a" * 40, (choice,))
+    calls = []
+
+    class Downloads:
+        def prepare(self, model, token):
+            calls.append(threading.get_ident())
+            assert model == remote and token == "session-token"
+            return plan
+
+        def download(self, received, selected, cancel, progress, token):
+            calls.append(threading.get_ident())
+            assert received == plan and selected == choice and token == "session-token"
+            progress(5 * GIB, 5 * GIB, "Tiny.gguf")
+            backend._models.append(local)
+            return local.ref
+
+    view._downloads = Downloads()
+    try:
+        view._discovery.apply_results([remote], Hardware("Linux", "x86_64", 16 * GIB), False)
+        view._discovery.token.setText("session-token")
+        assert not view._discovery.download.isEnabled()
+        _trigger(view.job_finished, view._discovery.files.click)
+        assert view._discovery.download.isEnabled()
+        assert "5.00 GB" in view._discovery.choices.currentText()
+        _trigger(view.refreshed, view._discovery.download.click)
+        assert view.selected_model().ref == local.ref
+        job = view.downloads.jobs[1]
+        assert job.done == 5 * GIB and job.state == "Complete"
+        assert view.download_view._rows[1][1].value() == 1000
+        assert view._discovery.download.text() == "View downloads"
+        view._discovery.download.click()
+        assert window._downloads_popover.isVisible()
+        view.download_view._rows[1][2].click()
+        assert not window._downloads_popover.isVisible()
+        assert view._tabs.currentIndex() == 0
+        assert view.selected_model().ref == local.ref
+        assert len(calls) == 2 and all(ident != threading.get_ident() for ident in calls)
+    finally:
+        window.close()
+        store.close()
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+def test_download_cancellation_and_shutdown_stop_worker(shutdown):
+    _qapp()
+    from llm_engine.services.discovery import GIB, Hardware, RemoteModel
+    from llm_engine.services.downloads import DownloadChoice, DownloadPlan, HubFile
+
+    view = _view(StubCatalog([], {}))
+    remote = RemoteModel("owner/Tiny-1B", "gguf", 1, GIB, "Estimated")
+    choice = DownloadChoice("Tiny.gguf", (HubFile("Tiny.gguf", 1),))
+    plan = DownloadPlan(remote, "a" * 40, (choice,))
+    entered = threading.Event()
+    stopped = threading.Event()
+
+    class Downloads:
+        def download(self, plan, choice, cancel, progress, token):
+            entered.set()
+            assert cancel.wait(2)
+            stopped.set()
+            raise EngineError("cancelled", "Download cancelled. Partial files removed.")
+
+    view._downloads = Downloads()
+    try:
+        view._discovery.apply_results([remote], Hardware("Linux", "x86_64", 16 * GIB), False)
+        view._discovery.apply_plan(plan)
+        view._discovery.download.click()
+        assert entered.wait(2)
+        assert view._discovery.results.isEnabled()
+        assert view._discovery.search.isEnabled()
+        if shutdown:
+            assert view.shutdown()
+        else:
+            _trigger(view.downloads.changed, lambda: view.downloads.cancel(1))
+            from PySide6.QtTest import QTest
+            from PySide6.QtWidgets import QApplication
+
+            for _ in range(100):
+                QApplication.processEvents()
+                if view.downloads.jobs[1].state == "Cancelled":
+                    break
+                QTest.qWait(10)
+            assert view.downloads.jobs[1].state == "Cancelled"
+            assert view._discovery.download.isEnabled()
+        assert stopped.is_set()
+    finally:
+        view.close()

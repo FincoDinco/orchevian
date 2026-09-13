@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeyEvent, QResizeEvent, QTextCursor
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QPlainTextEdit, QPushButton, QWidget
 
 _MIN_H = 40
 _MAX_H = 140
-_SEND_PX = 32
+_SEND_PX = 34
 
 
 class ComposerEdit(QPlainTextEdit):
@@ -56,7 +56,7 @@ class Composer(QWidget):
 
         self._edit = ComposerEdit(self)
         self._edit.setObjectName("composerEdit")
-        self._edit.setPlaceholderText("Ask anything, or work through an idea…")
+        self._edit.setPlaceholderText("Message your model")
         self._edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._edit.setTabChangesFocus(True)
         self._edit.setFixedHeight(_MIN_H)
@@ -75,17 +75,12 @@ class Composer(QWidget):
         self._send.setAccessibleName("Send message")
         self._send.clicked.connect(self._on_send_clicked)
 
-        self._hint = QLabel("Enter to send · Shift + Enter for a new line", self)
-        self._hint.setObjectName("composerHint")
-        footer = QHBoxLayout()
-        footer.setContentsMargins(8, 0, 4, 0)
-        footer.addWidget(self._hint, 1)
-        footer.addWidget(self._send)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
-        layout.addWidget(self._edit)
-        layout.addLayout(footer)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 6, 10, 6)
+        layout.setSpacing(10)
+        layout.addWidget(self._edit, 1)
+        layout.addWidget(self._send, 0, Qt.AlignmentFlag.AlignBottom)
+        self.set_return_sends(True)
 
     def text(self) -> str:
         return self._edit.toPlainText()
@@ -106,7 +101,7 @@ class Composer(QWidget):
 
     def set_return_sends(self, enabled: bool) -> None:
         self._edit.set_return_sends(enabled)
-        self._hint.setText(
+        self._edit.setToolTip(
             "Enter to send · Shift + Enter for a new line"
             if enabled else "⌘ / Ctrl + Enter to send · Enter for a new line"
         )

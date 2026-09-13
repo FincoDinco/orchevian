@@ -29,11 +29,12 @@ from PySide6.QtWidgets import (
 
 from llm_engine.domain.models import Conversation, ConversationSummary, ModelRef, Project
 from llm_manager_app.icons import icon
+from llm_manager_app.model_names import ModelNames, friendly_name
 from llm_manager_app.tokens import current_palette, qcolor
 
 # Ellipsis = All folders; None = ungrouped.
 _UNFILTERED: EllipsisType = ...
-_ROW_H = 52
+_ROW_H = 36
 
 
 def relative_stamp(when: datetime, *, now: datetime | None = None) -> str:
@@ -50,11 +51,12 @@ def relative_stamp(when: datetime, *, now: datetime | None = None) -> str:
     return f"{when.strftime('%b')} {when.day}"
 
 
-def row_meta(summary: ConversationSummary) -> str:
+def row_meta(summary: ConversationSummary, names: ModelNames | None = None) -> str:
     stamp = relative_stamp(summary.updated_at)
     if summary.model is None:
         return stamp
-    return f"{stamp} · {summary.model.name}"
+    name = names.display(summary.model) if names else friendly_name(summary.model.name)
+    return f"{stamp} · {name}"
 
 
 class ConversationDelegate(QStyledItemDelegate):
@@ -74,12 +76,9 @@ class ConversationDelegate(QStyledItemDelegate):
             painter.setBrush(qcolor(palette.selection))
             painter.drawRoundedRect(rect, palette.radius_control, palette.radius_control)
         title = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
-        summary = index.data(ConversationListModel.SummaryRole)
-        meta = row_meta(summary) if isinstance(summary, ConversationSummary) else ""
-        title_rect = QRect(rect.x() + 10, rect.y() + 6, rect.width() - 20, 20)
-        meta_rect = QRect(rect.x() + 10, rect.y() + 26, rect.width() - 20, 18)
+        title_rect = QRect(rect.x() + 10, rect.y(), rect.width() - 20, rect.height())
         title_font = QFont(option.font)
-        title_font.setWeight(QFont.Weight.DemiBold)
+        title_font.setWeight(QFont.Weight.Normal)
         painter.setFont(title_font)
         painter.setPen(QColor(palette.text))
         elided = painter.fontMetrics().elidedText(
@@ -89,19 +88,6 @@ class ConversationDelegate(QStyledItemDelegate):
             title_rect,
             Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine,
             elided,
-        )
-        meta_font = QFont(option.font)
-        if meta_font.pointSize() > 0:
-            meta_font.setPointSize(max(11, meta_font.pointSize() - 1))
-        painter.setFont(meta_font)
-        painter.setPen(QColor(palette.secondary))
-        elided_meta = painter.fontMetrics().elidedText(
-            meta, Qt.TextElideMode.ElideRight, meta_rect.width()
-        )
-        painter.drawText(
-            meta_rect,
-            Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine,
-            elided_meta,
         )
         painter.restore()
 
@@ -129,8 +115,9 @@ class ConversationListModel(QAbstractListModel):
     IdRole = Qt.ItemDataRole.UserRole
     SummaryRole = Qt.ItemDataRole.UserRole + 1
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, names: ModelNames | None = None) -> None:
         super().__init__(parent)
+        self._names = names
         self._rows: list[ConversationSummary] = []
 
     def set_rows(self, rows: list[ConversationSummary]) -> None:
@@ -155,6 +142,8 @@ class ConversationListModel(QAbstractListModel):
             return row.id
         if role == self.SummaryRole:
             return row
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return f"{row.title}\n{row_meta(row, self._names)}"
         return None
 
     def summary_at(self, row: int) -> ConversationSummary | None:
@@ -174,7 +163,10 @@ class ConversationList(QWidget):
     chat_created = Signal(int)
     conversation_activated = Signal()
 
-    def __init__(self, parent: QWidget | None = None, *, library: ConversationStore) -> None:
+    def __init__(
+        self, parent: QWidget | None = None, *, library: ConversationStore,
+        names: ModelNames | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("listPane")
         self._library = library
@@ -194,7 +186,7 @@ class ConversationList(QWidget):
         self._new_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._new_btn.clicked.connect(lambda: self.new_chat())
 
-        self._model = ConversationListModel(self)
+        self._model = ConversationListModel(self, names=names)
         self._view = QListView(self)
         self._view.setObjectName("conversationView")
         self._view.setModel(self._model)
@@ -223,8 +215,8 @@ class ConversationList(QWidget):
         self._stack.addWidget(self._view)
         self._stack.addWidget(self._empty)
 
-        self._heading = QLabel("CONVERSATIONS", self)
-        self._heading.setObjectName("eyebrow")
+        self._heading = QLabel("Recents", self)
+        self._heading.setObjectName("sidebarSection")
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -253,7 +245,8 @@ class ConversationList(QWidget):
 
     def set_embedded(self) -> None:
         self._new_btn.hide()
-        self.layout().setContentsMargins(12, 8, 12, 0)
+        self._search.hide()
+        self.layout().setContentsMargins(4, 16, 4, 0)
 
     def set_project_filter(
         self,
@@ -265,10 +258,11 @@ class ConversationList(QWidget):
             return
         self._project_id = project_id
         self._project_name = project_name
-        self._heading.setText((project_name or "Conversations").upper())
+        self._heading.setText(project_name or "Recents")
         self.refresh()
 
     def focus_search(self) -> None:
+        self._search.show()
         self._search.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self._search.selectAll()
 
@@ -388,7 +382,7 @@ class ConversationList(QWidget):
         menu = QMenu(self)
         menu.addAction("Rename", lambda: self.rename_selected())
         move_menu = menu.addMenu("Move to")
-        move_menu.addAction("Ungrouped", lambda: self.move_selected(None))
+        move_menu.addAction("Move out of project", lambda: self.move_selected(None))
         for project in self._library.list_projects():
             move_menu.addAction(
                 f"Project: {project.name}",

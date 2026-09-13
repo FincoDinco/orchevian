@@ -82,7 +82,8 @@ def test_default_list_models_reports_mlx_gguf_availability(
     assert "gguf" in availability
     mlx_ok, mlx_reason = availability["mlx"]
     if not mlx_ok:
-        assert mlx_reason == "MLX requires macOS Apple Silicon and extra 'mlx'"
+        assert "MLX" in mlx_reason
+        assert "Apple Silicon" in mlx_reason or "--extra mlx" in mlx_reason
 
 
 def test_env_flag_registers_fake_instead_of_ollama(monkeypatch: pytest.MonkeyPatch) -> None:

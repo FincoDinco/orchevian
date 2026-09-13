@@ -34,10 +34,37 @@ class _LineIcon(QIconEngine):
             )
         )
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        if self.name == "chat":
+        if self.name in {"chevron-right", "chevron-down"}:
+            points = [(9, 5), (16, 12), (9, 19)] if self.name == "chevron-right" else [
+                (5, 9), (12, 16), (19, 9)
+            ]
+            painter.drawPolyline(QPolygonF([QPointF(x, y) for x, y in points]))
+        elif self.name == "sidebar":
+            painter.drawRoundedRect(QRectF(3, 4, 18, 16), 2, 2)
+            painter.drawLine(9, 4, 9, 20)
+        elif self.name == "close":
+            painter.drawLine(7, 7, 17, 17)
+            painter.drawLine(17, 7, 7, 17)
+        elif self.name == "compose":
+            painter.drawPolyline(QPolygonF([QPointF(19, 13), QPointF(19, 20),
+                                           QPointF(4, 20), QPointF(4, 5), QPointF(11, 5)]))
+            painter.drawPolygon(QPolygonF([QPointF(10, 14), QPointF(11, 10),
+                                          QPointF(19, 2), QPointF(22, 5), QPointF(14, 13)]))
+        elif self.name == "lock":
+            painter.drawRoundedRect(QRectF(5, 10, 14, 11), 2, 2)
+            painter.drawArc(QRectF(8, 3, 8, 14), 0, 180 * 16)
+            painter.drawLine(12, 14, 12, 17)
+        elif self.name == "chat":
             painter.drawRoundedRect(QRectF(4, 4, 16, 13), 3, 3)
             painter.drawLine(7, 17, 7, 21)
             painter.drawLine(7, 21, 12, 17)
+        elif self.name == "download":
+            painter.drawLine(12, 3, 12, 15)
+            painter.drawLine(7, 10, 12, 15)
+            painter.drawLine(17, 10, 12, 15)
+            painter.drawPolyline(QPolygonF([
+                QPointF(4, 16), QPointF(4, 21), QPointF(20, 21), QPointF(20, 16),
+            ]))
         elif self.name == "models":
             painter.drawRoundedRect(QRectF(6, 6, 12, 12), 2, 2)
             painter.drawRect(QRectF(10, 10, 4, 4))

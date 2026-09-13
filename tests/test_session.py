@@ -326,7 +326,7 @@ def test_mlx_is_available_false_when_not_apple_silicon(monkeypatch: pytest.Monke
     monkeypatch.setattr("llm_engine.backends.mlx._module_available", lambda _name: True)
     ok, reason = MLXBackend().is_available()
     assert ok is False
-    assert reason == "MLX requires macOS Apple Silicon and extra 'mlx'"
+    assert reason == "MLX requires macOS Apple Silicon."
 
 
 def test_mlx_is_available_false_when_extra_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -336,7 +336,8 @@ def test_mlx_is_available_false_when_extra_missing(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("llm_engine.backends.mlx._module_available", lambda _name: False)
     ok, reason = MLXBackend().is_available()
     assert ok is False
-    assert reason == "MLX requires macOS Apple Silicon and extra 'mlx'"
+    assert "runtime missing" in reason
+    assert "--extra mlx" in reason
 
 
 def test_mlx_is_available_true_on_apple_silicon_with_extra(

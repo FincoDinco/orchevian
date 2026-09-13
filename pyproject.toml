@@ -1,7 +1,7 @@
 [project]
-name = "llm-engine"
+name = "orchevian"
 version = "0.1.0"
-description = "Local-first engine for LLM Manager"
+description = "Local-first AI workspace for Orchevian"
 readme = "README.md"
 authors = [
     { name = "Seth Hardin", email = "personal@sethhardin.com" },
@@ -9,14 +9,18 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28.1",
+    "psutil>=7.2.2",
 ]
 
 [project.optional-dependencies]
-mlx = ["mlx-lm"]
+mlx = ["mlx-lm; sys_platform == 'darwin' and platform_machine == 'arm64'"]
 gguf = ["llama-cpp-python"]
 gui = ["PySide6>=6.7", "markdown>=3.7"]
 
 [project.scripts]
+orchevian = "llm_manager_app.__main__:main"
+orchevian-engine = "llm_engine.cli:main"
+# Keep existing launchers working after the rename.
 llm-engine = "llm_engine.cli:main"
 llm-manager = "llm_manager_app.__main__:main"
 

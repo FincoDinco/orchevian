@@ -35,7 +35,7 @@ def _qapp():
 
     app = QApplication.instance()
     if app is None:
-        app = QApplication(["llm-manager-tests"])
+        app = QApplication(["orchevian-tests"])
     return app
 
 
@@ -118,16 +118,16 @@ def test_picker_grouped_by_backend_and_set_model(tmp_path: Path) -> None:
         texts = [action.text() for action in menu.actions()]
         assert "Ollama" in texts
         assert "MLX" in texts
-        assert "fake" in texts
-        assert "qwen3:8b" in texts
-        assert "qwen2-7b" in texts
+        assert "Fake" in texts
+        assert "Qwen 3 · 8B" in texts
+        assert "Qwen 2 · 7B" in texts
         assert "Manage Models…" in texts
         ollama_at = texts.index("Ollama")
         mlx_at = texts.index("MLX")
-        assert ollama_at < texts.index("fake") < mlx_at < texts.index("qwen2-7b")
+        assert ollama_at < texts.index("Fake") < mlx_at < texts.index("Qwen 2 · 7B")
 
         for action in menu.actions():
-            if action.text() == "qwen3:8b":
+            if action.text() == "Qwen 3 · 8B":
                 action.trigger()
                 break
         else:
@@ -135,7 +135,7 @@ def test_picker_grouped_by_backend_and_set_model(tmp_path: Path) -> None:
         app.processEvents()
         loaded = library.get_conversation(cid)
         assert loaded.summary.model == QWEN.ref
-        assert picker.text() == "qwen3:8b"
+        assert picker.text() == "Qwen 3 · 8B"
         assert send.isEnabled()
     finally:
         window.close()
@@ -168,7 +168,7 @@ def test_manage_models_switches_section(tmp_path: Path) -> None:
             raise AssertionError("Manage Models… missing")
         app.processEvents()
         assert window._sidebar.current_section() == MODELS
-        assert window.windowTitle() == "Models — LLM Manager"
+        assert window.windowTitle() == "Models — Orchevian"
     finally:
         window.close()
         store.close()
@@ -368,10 +368,10 @@ def test_picker_disabled_until_catalog_ready() -> None:
         assert send is not None and not send.isEnabled()
         menu = picker.menu()
         assert menu is not None
-        assert "fake" not in [action.text() for action in menu.actions()]
+        assert "Fake" not in [action.text() for action in menu.actions()]
         view.set_catalog([LOCAL], {"ollama": (True, None)})
         assert picker.isEnabled()
         assert picker.has_models()
-        assert "fake" in [action.text() for action in menu.actions()]
+        assert "Fake" in [action.text() for action in menu.actions()]
     finally:
         view.close()

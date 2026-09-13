@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup
-from PySide6.QtWidgets import QMenu, QToolButton, QWidget
+from PySide6.QtWidgets import (
+    QMenu,
+    QStyle,
+    QStyleOptionToolButton,
+    QStylePainter,
+    QToolButton,
+    QWidget,
+)
 
 from llm_engine.domain.models import LocalModel, ModelRef
+from llm_manager_app.model_names import BACKEND_ORDER, BACKEND_TITLES, ModelNames
 
-_BACKEND_ORDER = ("ollama", "mlx", "gguf")
-_BACKEND_TITLES = {"ollama": "Ollama", "mlx": "MLX", "gguf": "GGUF"}
+_BACKEND_ORDER = BACKEND_ORDER
+_BACKEND_TITLES = BACKEND_TITLES
 _SELECT = "Select a model"
 _MANAGE = "Manage Models…"
 
@@ -44,8 +52,10 @@ class ModelPicker(QToolButton):
     manage_models_requested = Signal()
     catalog_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, names: ModelNames | None = None) -> None:
         super().__init__(parent)
+        self._names = names or ModelNames(parent=self)
+        self._names.changed.connect(self.refresh_names)
         self.setObjectName("modelPicker")
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -68,6 +78,15 @@ class ModelPicker(QToolButton):
     def current(self) -> ModelRef | None:
         return self._current
 
+    def paintEvent(self, _event) -> None:
+        option = QStyleOptionToolButton()
+        self.initStyleOption(option)
+        option.text = self.fontMetrics().elidedText(
+            self.text(), Qt.TextElideMode.ElideRight, max(0, self.width() - 30),
+        )
+        painter = QStylePainter(self)
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ToolButton, option)
+
     def has_models(self) -> bool:
         return bool(self._models)
 
@@ -86,7 +105,7 @@ class ModelPicker(QToolButton):
             self.setText(_SELECT)
             self.setToolTip(_SELECT)
         else:
-            self.setText(ref.name)
+            self.setText(self._names.display(ref))
             self.setToolTip(ref.id)
 
     def set_catalog(
@@ -104,11 +123,17 @@ class ModelPicker(QToolButton):
         self._rebuild_menu()
         self.catalog_requested.emit()
 
+    def refresh_names(self, *_args: object) -> None:
+        self.set_current(self._current)
+        if not self._menu.isVisible():
+            self._rebuild_menu()
+
     def _rebuild_menu(self) -> None:
         self._menu.clear()
         group = QActionGroup(self._menu)
         group.setExclusive(True)
         keys = _backend_keys(self._models, self._availability)
+        labels = self._names.labels(model.ref for model in self._models)
         for key in keys:
             self._menu.addSection(_title(key))
             ok, reason = self._availability.get(key, (True, None))
@@ -122,7 +147,9 @@ class ModelPicker(QToolButton):
                 action.setEnabled(False)
                 continue
             for model in grouped:
-                action = self._menu.addAction(model.ref.name)
+                action = self._menu.addAction(labels[model.ref.id])
+                action.setToolTip(model.ref.id)
+                action.setEnabled(model.available)
                 action.setCheckable(True)
                 action.setData(model.ref)
                 group.addAction(action)

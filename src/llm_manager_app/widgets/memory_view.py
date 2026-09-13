@@ -1,4 +1,4 @@
-"""An integrated second brain: note editor, Markdown reader, backlinks, and graph."""
+"""An integrated Second Brain: note editor, Markdown reader, backlinks, and graph."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -60,7 +61,7 @@ class MemoryView(QWidget):
         self._busy = False
         self._capture_available = False
 
-        title = QLabel("Second brain", self)
+        title = QLabel("Second Brain", self)
         title.setObjectName("pageTitle")
         subtitle = QLabel("A place for ideas to grow and connect.", self)
         subtitle.setObjectName("pageSubtitle")
@@ -153,16 +154,19 @@ class MemoryView(QWidget):
         self._save = QPushButton("Save note", self)
         self._save.setObjectName("memorySave")
         self._save.clicked.connect(self.save_note)
-        self._reload = QPushButton("Reload", self)
-        self._reload.clicked.connect(self.reload_note)
-        self._trash = QPushButton("Move to trash", self)
-        self._trash.clicked.connect(self.trash_note)
+        self._more = QPushButton("More", self)
+        self._more.setAccessibleName("More note actions")
+        more = QMenu(self._more)
+        self._reload = more.addAction("Reload from disk", self.reload_note)
+        more.addSeparator()
+        self._trash = more.addAction("Move to trash…", self.trash_note)
+        self._more.setMenu(more)
         self._source = QPushButton("Open conversation", self)
         self._source.clicked.connect(self._open_source)
         fit = QPushButton("Fit graph", self)
         fit.clicked.connect(self._graph.fit_graph)
         self._fit = fit
-        for button in (self._save, self._reload, self._trash, self._source, fit):
+        for button in (self._save, self._source, fit, self._more):
             actions.addWidget(button)
         actions.addStretch()
         detail_layout.addLayout(actions)
@@ -291,7 +295,7 @@ class MemoryView(QWidget):
         palette = current_palette()
         if self._active is None:
             body = (
-                "# Build your second brain\n\nCreate a note, or use **Remember chat** to let "
+                "# Build your Second Brain\n\nCreate a note, or use **Remember chat** to let "
                 "your model extract useful memories from a conversation.\n\n"
                 "Connect notes with `[[Note title]]`. Follow their connections here, "
                 "or explore the **Graph**."
@@ -472,7 +476,7 @@ class MemoryView(QWidget):
         if not self.prepare_close():
             return
         chosen = QFileDialog.getExistingDirectory(
-            self, "Choose a second brain vault", str(self.vault.root)
+            self, "Choose a Second Brain vault", str(self.vault.root)
         )
         if chosen:
             self.vault = MemoryVault(Path(chosen))
@@ -492,8 +496,8 @@ class MemoryView(QWidget):
         self._connections.setVisible(not graph)
         self._connection_label.setVisible(not graph)
         self._fit.setVisible(graph)
-        for button in (self._save, self._reload, self._trash):
-            button.setVisible(not graph)
+        self._save.setVisible(index == 1)
+        self._more.setVisible(not graph)
         self._source.setVisible(
             not graph and self._active is not None and self._active.source_id is not None
         )
@@ -511,7 +515,7 @@ class MemoryView(QWidget):
             QListWidget#memoryNotes, QListWidget#memoryConnections, QTextBrowser#memoryReader,
             QPlainTextEdit#memoryEditor {{ background: {palette.canvas}; border: none; }}
             QListWidget#memoryNotes::item {{
-                padding: 12px 8px; margin: 2px 0; border-radius: 8px; }}
+                padding: 12px 8px; margin: 2px 0; border-radius: {palette.radius_control}px; }}
             QListWidget#memoryNotes::item:selected {{
                 background: {palette.selection}; color: {palette.text}; }}
             QListWidget#memoryConnections::item {{ padding: 4px 8px; }}

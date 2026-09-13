@@ -34,7 +34,7 @@ def _qapp():
 
     app = QApplication.instance()
     if app is None:
-        app = QApplication(["llm-manager-tests"])
+        app = QApplication(["orchevian-tests"])
     return app
 
 
@@ -567,3 +567,60 @@ def test_caret_hides_when_scrolled_out_of_view() -> None:
     app.processEvents()
     assert not caret.isVisible()
     host.close()
+
+
+def test_thinking_stream_is_collapsed_and_stored_verbatim():
+    _qapp()
+    from PySide6.QtCore import QUrl
+
+    from llm_manager_app.widgets.transcript import Transcript
+
+    transcript = Transcript()
+    try:
+        transcript.begin_stream()
+        chunks = (
+            "<th", "ink>", "Consider each option.\n" * 100, "</thi", "nk>", "The answer is 42.",
+        )
+        for chunk in chunks:
+            transcript.append_stream(chunk)
+            assert "Consider each option" not in transcript._plain.toPlainText()
+            assert "<th" not in transcript._plain.toPlainText()
+        assert not transcript._thought_toggle.isHidden()
+        assert transcript._thought_text.isHidden()
+        transcript._thought_toggle.click()
+        assert "Consider each option" in transcript._thought_text.toPlainText()
+        assert transcript._thought_text.maximumHeight() == 150
+        transcript.finish_stream(parse_markdown=True)
+        assert transcript.turns()[0].content == "".join(chunks)
+        assert "The answer is 42." in transcript._browser.toPlainText()
+        assert "Consider each option" not in transcript._browser.toPlainText()
+        transcript._open_link(QUrl("#thinking-0"))
+        assert "Consider each option" in transcript._browser.toPlainText()
+        transcript._open_link(QUrl("#thinking-0"))
+        assert "Consider each option" not in transcript._browser.toPlainText()
+    finally:
+        transcript.close()
+
+
+def test_cancelled_thinking_remains_available_and_user_tags_are_literal():
+    _qapp()
+    from PySide6.QtCore import QUrl
+
+    from llm_manager_app.widgets.transcript import Transcript
+
+    transcript = Transcript()
+    try:
+        transcript.set_turns([ChatTurn("user", "What does <think> mean?")])
+        transcript.restore_stream("<think>Still working on the problem")
+        assert "What does <think> mean?" in transcript._plain.toPlainText()
+        assert "Still working" not in transcript._plain.toPlainText()
+        transcript.keep_stream()
+        assert transcript.turns()[-1].content == "<think>Still working on the problem"
+        assert "Still working" not in transcript._browser.toPlainText()
+        transcript._open_link(QUrl("#thinking-1"))
+        assert "Still working" in transcript._browser.toPlainText()
+        transcript.set_turns([ChatTurn("assistant", "A normal answer")])
+        assert transcript._thought_toggle.isHidden()
+        assert transcript._browser.toPlainText().endswith("A normal answer")
+    finally:
+        transcript.close()

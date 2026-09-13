@@ -18,8 +18,8 @@ def build_parser() -> argparse.ArgumentParser:
     shared.add_argument("-v", "--verbose", action="store_true", help="DEBUG logging")
 
     parser = argparse.ArgumentParser(
-        prog="llm-engine",
-        description="LLM Manager engine CLI",
+        prog="orchevian-engine",
+        description="Orchevian engine CLI",
         parents=[shared],
     )
     sub = parser.add_subparsers(dest="command")
@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _unimplemented(command: str) -> int:
-    print(f"llm-engine {command}: not implemented", file=sys.stderr)
+    print(f"orchevian-engine {command}: not implemented", file=sys.stderr)
     return 1
 
 

@@ -177,6 +177,21 @@ class ModelSession:
             self._generating = False
             self._lock.release()
 
+    def delete(self, ref: ModelRef) -> None:
+        """Resolve and delete under the same lock used by loading and generation."""
+        if not self._lock.acquire(blocking=False):
+            raise EngineError("generating", "Stop the current model operation before deleting.")
+        try:
+            backend = self._registry.get(str(ref.backend))
+            model = self._resolve(backend, ref)
+            if self._handle is not None and self._handle.model.ref == ref:
+                self._drop_handle()
+            backend.delete(model)
+        except OSError as exc:
+            raise EngineError("delete_failed", f"Could not delete {ref.name}: {exc}") from exc
+        finally:
+            self._lock.release()
+
     def force_unload(self) -> bool:
         if self._generating or self._lock.locked():
             backend = self._operation_backend or self._backend

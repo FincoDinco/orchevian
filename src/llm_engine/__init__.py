@@ -1,4 +1,4 @@
-"""LLM Manager engine library. No GUI toolkit imports."""
+"""Orchevian engine library. No GUI toolkit imports."""
 
 from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import (

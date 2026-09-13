@@ -91,7 +91,7 @@ def test_qcolor_parses_studio_rgba_selection() -> None:
 
 def test_studio_qss_is_small_and_uses_named_colors() -> None:
     sheet = qss(DARK)
-    assert len(sheet.splitlines()) < 220
+    assert len(sheet) < 16_000
     assert DARK.canvas in sheet
     assert DARK.selection in sheet
     assert DARK.danger in sheet
@@ -112,7 +112,7 @@ def _qapp():
 
     app = QApplication.instance()
     if app is None:
-        app = QApplication(["llm-manager-tests"])
+        app = QApplication(["orchevian-tests"])
     return app
 
 
@@ -141,12 +141,12 @@ def _window(tmp_path: Path, registry: BackendRegistry | None = None, library=Non
 
 def test_main_window_unified_sidebar_and_workspace(tmp_path: Path) -> None:
     try:
-        _qapp()
+        app = _qapp()
     except Exception as exc:
         pytest.skip(f"no display: {exc}")
 
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QLabel, QListView, QSplitter, QStackedWidget
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtWidgets import QLabel, QListView, QSplitter, QStackedWidget, QToolBar
 
     from llm_manager_app.widgets.chat_view import ChatView
     from llm_manager_app.widgets.conversation_list import ConversationList
@@ -163,7 +163,8 @@ def test_main_window_unified_sidebar_and_workspace(tmp_path: Path) -> None:
         assert splitter is not None
         assert splitter.count() == 2
         sidebar = splitter.widget(0)
-        detail = splitter.widget(1)
+        workspace = splitter.widget(1)
+        detail = workspace.findChild(QStackedWidget, "detailPane")
         assert isinstance(sidebar, Sidebar)
         assert sidebar.findChild(ConversationList) is window._list
         view = sidebar.findChild(QListView, "conversationView")
@@ -175,10 +176,16 @@ def test_main_window_unified_sidebar_and_workspace(tmp_path: Path) -> None:
         empty = detail.findChild(QLabel, "chatEmpty")
         assert empty is not None
         assert "Select a conversation" in empty.text()
-        assert window.windowTitle() == "LLM Manager"
+        assert window.windowTitle() == "Orchevian"
         assert window.minimumWidth() >= 1024
         assert window.minimumHeight() >= 680
         assert not window.windowFlags() & Qt.WindowType.FramelessWindowHint
+        window.show()
+        app.processEvents()
+        toolbar = workspace.findChild(QToolBar, "workspaceToolbar")
+        assert toolbar is not None
+        assert window.toolBarArea(toolbar) == Qt.ToolBarArea.NoToolBarArea
+        assert sidebar.mapTo(window, QPoint()).y() == workspace.mapTo(window, QPoint()).y()
     finally:
         window.close()
         if store is not None:
@@ -277,7 +284,7 @@ def test_sidebar_chats_and_models(tmp_path: Path) -> None:
         sidebar.select_section(MODELS)
         assert sidebar.current_section() == "models"
         assert seen == ["models"]
-        assert window.windowTitle() == "Models — LLM Manager"
+        assert window.windowTitle() == "Models — Orchevian"
     finally:
         window.close()
         if store is not None:
@@ -297,6 +304,7 @@ def test_sidebar_collapses_to_named_tab_width(tmp_path: Path) -> None:
         window.show()
         app.processEvents()
         sidebar = window._sidebar
+        sidebar.new_project(name="Work")
         tree = window.findChild(QTreeView, "sidebarNav")
         btn = window.findChild(QToolButton, "sidebarCollapse")
         assert tree is not None and btn is not None
@@ -504,7 +512,7 @@ def test_conversation_crud_search_rename_delete_and_empty(tmp_path: Path) -> Non
         empty = window.findChild(QLabel, "listEmpty")
         assert empty is not None
         assert "No conversations" in empty.text()
-        assert window.windowTitle() == "LLM Manager"
+        assert window.windowTitle() == "Orchevian"
 
         first = pane.new_chat()
         pane.rename_selected("Alpha notes")
@@ -540,7 +548,7 @@ def test_conversation_crud_search_rename_delete_and_empty(tmp_path: Path) -> Non
         pane.delete_selected(confirmed=True)
         assert library.list_conversations() == []
         assert "No conversations" in empty.text()
-        assert window.windowTitle() == "LLM Manager"
+        assert window.windowTitle() == "Orchevian"
 
         actions = window.findChildren(QAction)
         keys = [a.shortcut() for a in actions]
@@ -572,7 +580,7 @@ def test_new_chat_shortcut_switches_to_chats(tmp_path: Path) -> None:
     window, store, _library_svc = _window(tmp_path)
     try:
         window._sidebar.select_section(MODELS)
-        assert window.windowTitle() == "Models — LLM Manager"
+        assert window.windowTitle() == "Models — Orchevian"
         window._new_chat_action.trigger()
         assert window._sidebar.current_section() == "chats"
         assert window._list.selected_title() == "New Chat"
@@ -650,12 +658,14 @@ def test_sidebar_project_folders_hide_templates(tmp_path: Path) -> None:
         tree = window.findChild(QTreeView, "sidebarNav")
         assert tree is not None
         labels = _sidebar_labels(window._sidebar)
-        assert labels == ["Chats", "All conversations", "Ungrouped", "Models", "Second brain"]
+        assert labels == [
+            "Chats", "Models", "Second Brain", "Projects"
+        ]
         assert "Templates" not in labels
         window._sidebar.new_project(name="Work")
         labels = _sidebar_labels(window._sidebar)
         assert labels == [
-            "Chats", "All conversations", "Work", "Ungrouped", "Models", "Second brain"
+            "Chats", "Models", "Second Brain", "Projects", "Work"
         ]
         assert window._sidebar.current_selection().project_id == library.list_projects()[0].id
     finally:
@@ -664,77 +674,52 @@ def test_sidebar_project_folders_hide_templates(tmp_path: Path) -> None:
             store.close()
 
 
-def test_project_sheet_parses_optional_model() -> None:
-    try:
-        _qapp()
-    except Exception as exc:
-        pytest.skip(f"no display: {exc}")
+def test_project_sheet_selects_downloaded_model() -> None:
+    _qapp()
+    from PySide6.QtWidgets import QComboBox
 
-    from PySide6.QtWidgets import QLineEdit, QPlainTextEdit
+    from llm_engine.domain.models import BackendName, LocalModel, ModelRef
+    from llm_manager_app.widgets.project_sheet import ProjectSheet
 
-    from llm_engine.domain.models import BackendName, ModelRef
-    from llm_manager_app.widgets.project_sheet import ProjectSheet, parse_model_ref
-
-    assert parse_model_ref("ollama/qwen3:8b") == ModelRef(BackendName.OLLAMA, "qwen3:8b")
-    with pytest.raises(ValueError):
-        parse_model_ref("not-a-model")
-
+    ref = ModelRef(BackendName.OLLAMA, "qwen3:8b")
     sheet = ProjectSheet()
+    accepted = []
+    sheet.accepted.connect(lambda: accepted.append(sheet.values()))
     try:
-        name_edit = sheet.findChild(QLineEdit, "projectName")
-        model_edit = sheet.findChild(QLineEdit, "projectModel")
-        instructions = sheet.findChild(QPlainTextEdit, "projectInstructions")
-        assert name_edit is not None and model_edit is not None and instructions is not None
-        name_edit.setText("Coding")
-        instructions.setPlainText("You are terse.")
-        model_edit.setText("ollama/qwen3:8b")
-        name, prompt, model = sheet.values()
-        assert name == "Coding"
-        assert prompt == "You are terse."
-        assert model == ModelRef(BackendName.OLLAMA, "qwen3:8b")
+        sheet.set_catalog([LocalModel(ref, None, 1)], {"ollama": (True, None)})
+        sheet._name.setText("Coding")
+        sheet._instructions.setPlainText("Explain things simply.")
+        combo = sheet.findChild(QComboBox, "projectModel")
+        assert combo is not None and not combo.isEditable()
+        assert combo.itemText(0) == "Use app default"
+        assert "Ollama" in [combo.itemText(i) for i in range(combo.count())]
+        combo.setCurrentIndex(combo.findData(ref))
+        assert combo.currentText() == "Qwen 3 · 8B"
+        assert sheet.values() == ("Coding", "Explain things simply.", ref)
+        sheet.accept()
+        assert len(accepted) == 1
     finally:
         sheet.close()
 
 
-def test_project_sheet_accept_invalid_and_blank_new_project(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    try:
-        _qapp()
-    except Exception as exc:
-        pytest.skip(f"no display: {exc}")
-
-    from PySide6.QtWidgets import QDialog, QLineEdit, QMessageBox
-
+def test_project_sheet_optional_model_and_blank_name(tmp_path: Path) -> None:
+    _qapp()
     from llm_manager_app.widgets.project_sheet import ProjectSheet
 
-    warned: list[str] = []
-
-    def fake_warning(
-        _parent: object, _title: str, text: str, *args: object, **kwargs: object
-    ) -> object:
-        warned.append(text)
-        return QMessageBox.StandardButton.Ok
-
-    monkeypatch.setattr(
-        "llm_manager_app.widgets.project_sheet.QMessageBox.warning",
-        fake_warning,
-    )
-
     sheet = ProjectSheet()
+    accepted = []
+    sheet.accepted.connect(lambda: accepted.append(sheet.values()))
     try:
-        name_edit = sheet.findChild(QLineEdit, "projectName")
-        model_edit = sheet.findChild(QLineEdit, "projectModel")
-        assert name_edit is not None and model_edit is not None
+        sheet.set_catalog([], {})
+        sheet._name.setText("   ")
+        assert not sheet._ok.isEnabled()
         sheet.accept()
-        assert sheet.result() != int(QDialog.DialogCode.Accepted)
-        assert warned == []
-
-        name_edit.setText("Work")
-        model_edit.setText("openai/foo")
+        assert accepted == []
+        sheet._name.setText("Work")
+        assert sheet._ok.isEnabled()
         sheet.accept()
-        assert sheet.result() != int(QDialog.DialogCode.Accepted)
-        assert warned
+        assert len(accepted) == 1
+        assert sheet.values() == ("Work", "", None)
     finally:
         sheet.close()
 
@@ -742,7 +727,6 @@ def test_project_sheet_accept_invalid_and_blank_new_project(
     try:
         assert window._sidebar.new_project(name="   ") is None
         assert library.list_projects() == []
-        assert window._sidebar._project_items == {}
     finally:
         window.close()
         if store is not None:
@@ -819,7 +803,7 @@ def test_conversation_list_filters_all_project_ungrouped(tmp_path: Path) -> None
         window._sidebar.select_project(home.id)
         assert _list_titles(window) == ["Home chat"]
 
-        window._sidebar.select_ungrouped()
+        window._list.set_project_filter(None)
         assert _list_titles(window) == ["Loose"]
     finally:
         window.close()
@@ -859,7 +843,7 @@ def test_move_conversation_and_delete_project_keeps_chats(tmp_path: Path) -> Non
         loaded = library.get_conversation(chat.summary.id)
         assert loaded.summary.project_id is None
         assert loaded.summary.title == "Moving"
-        window._sidebar.select_ungrouped()
+        window._list.set_project_filter(None)
         assert _list_titles(window) == ["Moving"]
         labels = _sidebar_labels(window._sidebar)
         assert "Home" not in labels

@@ -1,7 +1,8 @@
-"""Settings window (Ctrl/Cmd+,) and keyboard shortcuts sheet."""
+"""Settings workspace (Ctrl/Cmd+,) and keyboard shortcuts sheet."""
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -26,10 +27,12 @@ from PySide6.QtWidgets import (
 )
 
 from llm_engine import config
+from llm_manager_app.model_preferences import default_model, save_default_model
 
-ORG_NAME = "llm-manager"
-APP_NAME = "LLM Manager"
+ORG_NAME = "Orchevian"
+APP_NAME = "Orchevian"
 
+KEY_AUTO_MEMORY = "memory/automatic"
 KEY_APPEARANCE = "appearance"
 KEY_RETURN_SENDS = "return_sends"
 KEY_INSPECTOR_OPEN = "inspector_open"
@@ -39,10 +42,13 @@ DEFAULT_APPEARANCE = "dark"
 _SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("Ctrl+N", "New chat"),
     ("Ctrl+Shift+N", "New project"),
+    ("Ctrl+Shift+P", "Private chat"),
     ("Ctrl+,", "Settings"),
     ("Ctrl+1", "Chats"),
     ("Ctrl+2", "Models"),
-    ("Ctrl+3", "Second brain"),
+    ("Ctrl+3", "Second Brain"),
+    ("Ctrl+4", "Downloads"),
+    ("Ctrl+Meta+S" if sys.platform == "darwin" else "Ctrl+Shift+S", "Show or hide sidebar"),
     ("Ctrl+Shift+.", "Force stop model"),
     ("Ctrl+L", "Focus composer"),
     ("Ctrl+F", "Focus list search"),
@@ -80,8 +86,23 @@ def as_int(value: object) -> int | None:
         return None
 
 
+def migrate_settings(settings: QSettings, legacy: QSettings) -> QSettings:
+    """Import preferences once, preserving newer values and later user deletions."""
+    marker = "migration/llm_manager"
+    if as_bool(settings.value(marker, False), False):
+        return settings
+    for key in legacy.allKeys():
+        if not settings.contains(key):
+            settings.setValue(key, legacy.value(key))
+    settings.setValue(marker, True)
+    settings.sync()
+    return settings
+
+
 def make_settings() -> QSettings:
-    return QSettings(ORG_NAME, APP_NAME)
+    return migrate_settings(
+        QSettings(ORG_NAME, APP_NAME), QSettings("llm-manager", "LLM Manager"),
+    )
 
 
 def appearance_theme(settings: QSettings) -> str:
@@ -109,7 +130,10 @@ def _open_path(path: Path) -> None:
     QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(QWidget):
+    default_model_changed = Signal(object)
+    back_requested = Signal()
+    automatic_memory_changed = Signal(bool)
     appearance_changed = Signal(str)
     return_sends_changed = Signal(bool)
     rescan_requested = Signal()
@@ -124,14 +148,15 @@ class SettingsDialog(QDialog):
         db_path: Path | str | None = None,
         log_path: Path | str | None = None,
         open_path: Callable[[Path], None] | None = None,
+        names=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("settingsDialog")
         self.setWindowTitle("Settings")
-        self.setModal(False)
-        self.resize(520, 360)
+        self.resize(560, 400)
 
         self._settings = settings
+        self._names = names
         self._config_get = config_get or config.get
         self._config_set = config_set or config.set
         self._db_path = Path(db_path) if db_path is not None else None
@@ -144,18 +169,24 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._build_models(), "Models")
         tabs.addTab(self._build_advanced(), "Advanced")
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
-        buttons.rejected.connect(self.close)
-        buttons.accepted.connect(self.close)
+        heading = QLabel("Settings", self)
+        heading.setObjectName("pageTitle")
+        back = QPushButton("Back to chats", self)
+        back.clicked.connect(self.back_requested)
+        header = QHBoxLayout()
+        header.addWidget(heading)
+        header.addStretch()
+        header.addWidget(back)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.addLayout(header)
+        layout.setSpacing(16)
         layout.addWidget(tabs, 1)
-        layout.addWidget(buttons)
         self.reload()
 
     def reload(self) -> None:
+        self._default_model.set_current(default_model(self._settings))
         appearance = appearance_theme(self._settings)
         blocked = self._appearance.blockSignals(True)
         self._appearance.setCurrentIndex(0 if appearance == "dark" else 1)
@@ -166,6 +197,11 @@ class SettingsDialog(QDialog):
         self._return_sends.setChecked(return_sends)
         self._return_sends.blockSignals(blocked)
 
+        blocked = self._automatic_memory.blockSignals(True)
+        self._automatic_memory.setChecked(
+            as_bool(self._settings.value(KEY_AUTO_MEMORY, True), True)
+        )
+        self._automatic_memory.blockSignals(blocked)
         self._reload_engine_paths()
         self._models_error.hide()
 
@@ -192,9 +228,26 @@ class SettingsDialog(QDialog):
         form.addRow("Appearance", self._appearance)
         form.addRow("Composer", self._return_sends)
         form.addRow("", hint)
+        self._automatic_memory = QCheckBox("Automatically remember chats", page)
+        self._automatic_memory.setObjectName("automaticMemoryCheck")
+        self._automatic_memory.toggled.connect(self._on_automatic_memory)
+        memory_hint = QLabel(
+            "After regular chats, your local AI selects useful facts, preferences, and decisions "
+            "and connects them in Second Brain. Repeated or unhelpful details are filtered out. "
+            "You can review and edit saved memories there. "
+            "Private chats never use or add memories.",
+            page,
+        )
+        memory_hint.setObjectName("settingsHint")
+        memory_hint.setWordWrap(True)
+        form.addRow("Second Brain", self._automatic_memory)
+        form.addRow("", memory_hint)
         return page
 
     def _build_models(self) -> QWidget:
+        from llm_manager_app.model_names import ModelNames
+        from llm_manager_app.widgets.model_choice import ModelChoice
+
         page = QWidget(self)
         self._model_dir = QLineEdit(page)
         self._model_dir.setObjectName("modelDirEdit")
@@ -239,6 +292,20 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 12, 8, 8)
         layout.setSpacing(8)
+        self._default_model = ModelChoice(
+            page, names=self._names or ModelNames(self._settings, self),
+        )
+        self._default_model.combo.setObjectName("defaultModelChoice")
+        self._default_model.changed.connect(self._save_default_model)
+        layout.addWidget(QLabel("Default model for new chats", page))
+        layout.addWidget(self._default_model)
+        default_hint = QLabel(
+            "Used when a project has no default model. Existing chats keep their model.", page,
+        )
+        default_hint.setObjectName("settingsHint")
+        default_hint.setWordWrap(True)
+        layout.addWidget(default_hint)
+        layout.addSpacing(20)
         layout.addWidget(QLabel("Model directory", page))
         layout.addLayout(row)
         layout.addLayout(actions)
@@ -246,6 +313,13 @@ class SettingsDialog(QDialog):
         layout.addWidget(hint)
         layout.addStretch(1)
         return page
+
+    def set_catalog(self, models, availability) -> None:
+        self._default_model.set_catalog(models, availability)
+
+    def _save_default_model(self, ref) -> None:
+        save_default_model(self._settings, ref)
+        self.default_model_changed.emit(ref)
 
     def _build_advanced(self) -> QWidget:
         page = QWidget(self)
@@ -279,6 +353,10 @@ class SettingsDialog(QDialog):
         theme = str(self._appearance.currentData() or "dark")
         self._settings.setValue(KEY_APPEARANCE, theme)
         self.appearance_changed.emit(theme)
+
+    def _on_automatic_memory(self, checked: bool) -> None:
+        self._settings.setValue(KEY_AUTO_MEMORY, checked)
+        self.automatic_memory_changed.emit(checked)
 
     def _on_return_sends(self, checked: bool) -> None:
         self._settings.setValue(KEY_RETURN_SENDS, checked)

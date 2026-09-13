@@ -1,89 +1,95 @@
-"""New-project dialog: name plus optional instructions and default model."""
+"""Embedded project form, shared by creation and the home guidance card."""
 
-from __future__ import annotations
-
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QDialog,
-    QDialogButtonBox,
-    QFormLayout,
+    QHBoxLayout,
+    QLabel,
     QLineEdit,
-    QMessageBox,
     QPlainTextEdit,
+    QPushButton,
+    QVBoxLayout,
     QWidget,
 )
 
-from llm_engine.domain.models import BackendName, ModelRef
+from llm_manager_app.model_names import ModelNames
+from llm_manager_app.widgets.model_choice import ModelChoice
 
 
-def parse_model_ref(text: str) -> ModelRef:
-    stripped = text.strip()
-    backend, sep, name = stripped.partition("/")
-    if not sep or not backend.strip() or not name.strip():
-        raise ValueError("expected backend/name")
-    return ModelRef(BackendName(backend.strip().lower()), name.strip())
+class ProjectSheet(QWidget):
+    accepted = Signal()
+    rejected = Signal()
+    browse_requested = Signal()
 
-
-class ProjectSheet(QDialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent=None, *, names=None, draft=("", "", None), editing=False):
         super().__init__(parent)
         self.setObjectName("projectSheet")
-        self.setWindowTitle("New Project")
-        self.setModal(True)
-
-        self._name = QLineEdit(self)
+        self._names = names or ModelNames(parent=self)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+        title = QLabel("Edit project" if editing else "Create a project", self)
+        title.setObjectName("pageTitle")
+        layout.addWidget(title)
+        self._name = QLineEdit(draft[0], self)
         self._name.setObjectName("projectName")
-        self._name.setPlaceholderText("Name")
-
-        self._instructions = QPlainTextEdit(self)
+        self._name.setMaxLength(120)
+        self._name.setPlaceholderText("e.g. My writing")
+        layout.addWidget(QLabel("Project name", self))
+        layout.addWidget(self._name)
+        layout.addWidget(QLabel("Default model", self))
+        self.choice = ModelChoice(self, names=self._names, empty="Use app default")
+        self.choice.combo.setObjectName("projectModel")
+        self.choice.set_current(draft[2])
+        self._model = self.choice.combo
+        layout.addWidget(self.choice)
+        browse = QPushButton("Get more models…", self)
+        browse.clicked.connect(self.browse_requested)
+        layout.addWidget(browse, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(QLabel("Project guidance", self))
+        self._instructions = QPlainTextEdit(draft[1], self)
         self._instructions.setObjectName("projectInstructions")
-        self._instructions.setPlaceholderText("Optional instructions")
-        self._instructions.setFixedHeight(96)
-
-        self._model = QLineEdit(self)
-        self._model.setObjectName("projectModel")
-        self._model.setPlaceholderText("optional, e.g. ollama/qwen3:8b")
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
-            self,
+        self._instructions.setPlaceholderText("What should your model keep in mind?")
+        self._instructions.setFixedHeight(104)
+        self._instructions.setTabChangesFocus(True)
+        layout.addWidget(self._instructions)
+        hint = QLabel(
+            "Used to start new chats. Existing chats keep their model and instructions.", self,
         )
-        self._ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
-        if self._ok is not None:
-            self._ok.setEnabled(False)
-        self._name.textChanged.connect(self._sync_ok)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
+        hint.setObjectName("settingsHint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.error = QLabel(self)
+        self.error.setObjectName("settingsError")
+        self.error.setWordWrap(True)
+        self.error.hide()
+        layout.addWidget(self.error)
+        actions = QHBoxLayout()
+        cancel = QPushButton("Cancel", self)
+        cancel.clicked.connect(self.reject)
+        actions.addWidget(cancel)
+        actions.addStretch()
+        self._ok = QPushButton("Save" if editing else "Create project", self)
+        self._ok.setObjectName("primaryButton")
+        self._ok.clicked.connect(self.accept)
+        self._name.textChanged.connect(lambda: self._ok.setEnabled(bool(self._name.text().strip())))
+        self._ok.setEnabled(bool(self._name.text().strip()))
+        actions.addWidget(self._ok)
+        layout.addLayout(actions)
+        layout.addStretch()
 
-        self.resize(420, 280)
-        form = QFormLayout(self)
-        form.setContentsMargins(16, 16, 16, 16)
-        form.setSpacing(10)
-        form.addRow("Name", self._name)
-        form.addRow("Instructions", self._instructions)
-        form.addRow("Default model", self._model)
-        form.addRow(buttons)
+    def set_catalog(self, models, availability):
+        self.choice.set_catalog(models, availability)
 
-    def values(self) -> tuple[str, str, ModelRef | None]:
-        text = self._model.text().strip()
-        model = parse_model_ref(text) if text else None
-        return self._name.text().strip(), self._instructions.toPlainText(), model
+    def values(self):
+        return self._name.text().strip(), self._instructions.toPlainText(), self.choice.current()
 
-    def accept(self) -> None:
-        if not self._name.text().strip():
-            return
-        text = self._model.text().strip()
-        if text:
-            try:
-                parse_model_ref(text)
-            except ValueError:
-                QMessageBox.warning(
-                    self,
-                    "Invalid model",
-                    "Use backend/name, e.g. ollama/qwen3:8b",
-                )
-                return
-        super().accept()
+    def show_catalog_error(self, message):
+        self.error.setText(message)
+        self.error.show()
 
-    def _sync_ok(self, _text: str) -> None:
-        if self._ok is not None:
-            self._ok.setEnabled(bool(self._name.text().strip()))
+    def accept(self):
+        if self._name.text().strip():
+            self.accepted.emit()
+
+    def reject(self):
+        self.rejected.emit()

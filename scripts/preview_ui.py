@@ -1,6 +1,6 @@
 """Render the real Qt interface using temporary data and deterministic backends.
 
-Run: .venv/bin/python scripts/preview_ui.py --output /tmp/llm-manager-preview
+Run: .venv/bin/python scripts/preview_ui.py --output /tmp/orchevian-preview
 No installed models, network connections, or personal conversations are used.
 """
 
@@ -16,27 +16,31 @@ from tempfile import TemporaryDirectory
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings  # noqa: E402
+from PySide6.QtCore import QSettings, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from llm_engine.backends.fake import FakeBackend  # noqa: E402
 from llm_engine.backends.registry import BackendRegistry  # noqa: E402
 from llm_engine.domain.models import BackendName, ChatTurn, LocalModel, ModelRef  # noqa: E402
+from llm_engine.hardware import GIB, Hardware  # noqa: E402
+from llm_engine.services.discovery import RemoteModel  # noqa: E402
+from llm_engine.services.downloads import DownloadChoice, DownloadPlan, HubFile  # noqa: E402
 from llm_engine.store.library import LibraryService  # noqa: E402
 from llm_engine.store.sqlite import SqliteStore  # noqa: E402
 from llm_manager_app.main_window import MainWindow  # noqa: E402
-from llm_manager_app.widgets.settings import KEY_APPEARANCE  # noqa: E402
-from llm_manager_app.widgets.sidebar import CHATS, MEMORY, MODELS  # noqa: E402
+from llm_manager_app.widgets.downloads_view import DownloadJob  # noqa: E402
+from llm_manager_app.widgets.settings import KEY_APPEARANCE, SettingsDialog  # noqa: E402
+from llm_manager_app.widgets.sidebar import CHATS, MEMORY, MODELS, PRIVATE  # noqa: E402
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=Path("/tmp/llm-manager-preview"))
+    parser.add_argument("--output", type=Path, default=Path("/tmp/orchevian-preview"))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     app = QApplication([])
-    with TemporaryDirectory(prefix="llm-manager-demo-") as temporary:
+    with TemporaryDirectory(prefix="orchevian-demo-") as temporary:
         root = Path(temporary)
         store = SqliteStore(root / "demo.db")
         library = LibraryService(store)
@@ -54,17 +58,64 @@ def main() -> None:
         window = MainWindow(registry=registry, library=library, settings=settings)
         window.show()
 
-        def capture(name: str) -> None:
+        def capture(name: str, surface=None) -> None:
             QTest.qWait(150)
             app.processEvents()
             path = args.output / f"{name}.png"
-            if not window.grab().save(str(path)):
+            if not (surface or window).grab().save(str(path)):
                 raise RuntimeError(f"Could not save {path}")
             print(path)
 
         try:
             capture("welcome-dark")
-            library.create_project("Writing & research")
+            window._open_settings()
+            capture("settings-workspace-dark")
+            window.resize(1024, 680)
+            window._settings_dialog._appearance.setCurrentIndex(1)
+            capture("settings-workspace-light-compact")
+            window._sidebar.select_section(PRIVATE)
+            window._on_model_selected(models[0].ref)
+            private_id = window._private_id
+            window._chat_service._private_message(private_id, ChatTurn("user", "Help me think."))
+            window._chat_service._private_message(
+                private_id, ChatTurn("assistant", "What would you like to explore?"),
+            )
+            window._chat_view.set_conversation(window._chat_service.get_conversation(private_id))
+            capture("private-chat-light-compact")
+            window._on_appearance("dark")
+            capture("private-chat-dark-compact")
+            window._clear_private()
+            window.resize(1280, 800)
+            window._create_project()
+            project = window._project_form
+            project.set_catalog(models, {"ollama": (True, None)})
+            capture("create-project-dark")
+            project._model.showPopup()
+            capture("project-model-menu-dark", project._model.view().window())
+            project._model.hidePopup()
+            project._name.setText("Writing & research")
+            project._instructions.setPlainText(
+                "Help me develop clear ideas. Ask focused questions "
+                "and keep explanations practical."
+            )
+            project.choice.set_current(models[0].ref)
+            project.accept()
+            writing = library.list_projects()[0]
+            for title in ("A reading list for the weekend", "Ideas for the next essay"):
+                chat = library.create_conversation(writing.id)
+                library.rename(chat.summary.id, title)
+            window._sidebar.select_project(writing.id)
+            window._on_catalog_listed(models, {"ollama": (True, None)})
+            capture("project-home-dark")
+            window._on_appearance("light")
+            window.resize(1024, 680)
+            capture("project-home-light-compact")
+            window._project_home.edit_project()
+            capture("project-guidance-light-compact")
+            window._project_home.editor.reject()
+            window._on_appearance("dark")
+            window.resize(1280, 800)
+            window._sidebar.select_all()
             library.create_project("Side projects")
             for title in (
                 "A reading list for the weekend",
@@ -106,10 +157,100 @@ def main() -> None:
             window._chat_view.set_inspector_open(True)
             capture("chat-settings-dark")
             window._chat_view.set_inspector_open(False)
+            transcript = window._chat_view.transcript()
+            transcript.set_turns([conversation.messages[0]])
+            window._chat_view.composer().set_generating(True)
+            transcript.begin_stream()
+            transcript.append_stream(
+                "<think>I’ll consider the layout, interaction, and reading experience.\n"
+                "Keep frequent actions easy to find and let optional details stay out of the way."
+            )
+            capture("chat-thinking-collapsed-dark")
+            transcript._thought_toggle.click()
+            capture("chat-thinking-expanded-dark")
+            transcript.append_stream(
+                "</think>Start with a clear sidebar and a focused conversation."
+            )
+            transcript.finish_stream(parse_markdown=True)
+            window._chat_view.composer().set_generating(False)
+            capture("chat-thinking-complete-dark")
+            window._chat_view.set_conversation(conversation)
             window._sidebar.select_section(MODELS)
             QTest.qWait(300)
             capture("models-dark")
+            window._models.rename_selected("My writing helper")
+            capture("model-custom-name-dark")
+            window._models.rename_selected("")
+            window._models._details_toggle.click()
+            capture("model-details-dark")
+            window._models._details_toggle.click()
+            window._models._discovery.apply_results(
+                [RemoteModel(
+                    f"example/{name}", "mlx", 12000, memory * GIB,
+                    "Estimated from name at 4-bit, including 2 GB runtime/context allowance",
+                ) for name, memory in (
+                    ("Everyday-3B-4bit", 4), ("Chat-8B-4bit", 7), ("Code-7B-4bit", 6),
+                )],
+                Hardware("Darwin", "arm64", 24 * GIB, 18 * GIB, cpu_count=12), True,
+            )
+            window._models._tabs.setCurrentIndex(1)
+            capture("discovery-dark")
             window._on_appearance("light")
+            capture("discovery-light")
+            window.resize(1024, 680)
+            capture("discovery-compact")
+            discovery = window._models._discovery
+            remote = discovery.results.currentItem().data(Qt.ItemDataRole.UserRole)
+            discovery.apply_plan(DownloadPlan(remote, "a" * 40, (
+                DownloadChoice("Complete MLX model", (HubFile("model.safetensors", 5 * GIB),)),
+            )))
+            capture("download-ready-compact")
+            manager = window._models.downloads
+            for index in range(discovery.results.count()):
+                model = discovery.results.item(index).data(Qt.ItemDataRole.UserRole)
+                choice = DownloadChoice(
+                    "Complete MLX model", (HubFile("model.safetensors", 5 * GIB),),
+                )
+                plan = DownloadPlan(model, "a" * 40, (choice,))
+                manager.jobs[index + 1] = DownloadJob(
+                    index + 1, plan, choice,
+                    state="Downloading" if index < 2 else "Queued",
+                    done=(2 - index) * GIB if index < 2 else 0,
+                    message=f"{2 - index}.00 of 5.00 GB" if index < 2 else "Waiting for a slot",
+                )
+            manager.changed.emit()
+            capture("browsing-with-downloads-compact")
+            window._show_downloads()
+            QTest.qWait(100)
+            window._downloads_popover.grab().save(str(args.output / "downloads-popover-light.png"))
+            window._models.download_view._disclosures[1].click()
+            QTest.qWait(100)
+            window._downloads_popover.grab().save(str(args.output / "downloads-expanded-light.png"))
+            window._on_appearance("dark")
+            QTest.qWait(100)
+            window._downloads_popover.grab().save(str(args.output / "downloads-expanded-dark.png"))
+            window._downloads_popover.hide()
+            window._on_appearance("light")
+            window._sidebar.select_section(MODELS)
+            for name, dialog in (
+                ("discovery-options", discovery._options_dialog),
+                ("discovery-details", discovery._details_dialog),
+            ):
+                dialog.show()
+                QTest.qWait(100)
+                dialog.grab().save(str(args.output / f"{name}.png"))
+                dialog.hide()
+            preferences = SettingsDialog(
+                window, settings=settings,
+                config_get=lambda: {"model_dir": str(root / "models"), "api_port": 8080},
+                db_path=root / "demo.db", log_path=root / "engine.log",
+            )
+            preferences.show()
+            QTest.qWait(100)
+            preferences.grab().save(str(args.output / "settings-light.png"))
+            preferences.close()
+            window.resize(1280, 840)
+            window._models._tabs.setCurrentIndex(0)
             capture("models-light")
             window._sidebar.select_section(CHATS)
             window._chat_view.set_conversation(conversation)
