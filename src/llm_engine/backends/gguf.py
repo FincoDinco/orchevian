@@ -68,6 +68,11 @@ class GGUFBackend:
 
     def is_available(self) -> tuple[bool, str | None]:
         if not _module_available("llama_cpp"):
+            if getattr(sys, "frozen", False):
+                return False, (
+                    "This desktop build does not include the GGUF runtime. "
+                    "Use an Ollama model, or run Orchevian from source with the GGUF extra."
+                )
             return False, _UNAVAILABLE
         return True, None
 
@@ -139,6 +144,9 @@ class GGUFBackend:
         params: GenerationParams,
         cancel: CancelToken,
     ) -> Iterator[str]:
+        if any(turn.images for turn in messages):
+            raise EngineError("vision_required", "This backend currently supports text only. "
+                              "Use an Ollama vision model for image interpretation.")
         llama = _handle_runtime(handle)
         if cancel.is_set():
             return

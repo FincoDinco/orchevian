@@ -8,8 +8,20 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.115",
     "httpx>=0.28.1",
     "psutil>=7.2.2",
+    "pypdf>=6.0,<7",
+    "python-docx>=1.2,<2",
+    "openpyxl>=3.1.5,<4",
+    "defusedxml>=0.7.1",
+    "pillow>=11.3,<13",
+    "pypdfium2>=4.30,<6",
+    "uvicorn>=0.34",
+    "python-pptx>=1.0,<2",
+    "reportlab>=4.4,<5",
+    "pyyaml>=6,<7",
+    "pydantic>=2,<3",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +41,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
+packaging = ["pyinstaller>=6.16,<7"]
 dev = [
     "pytest>=8.3",
     "ruff>=0.9",

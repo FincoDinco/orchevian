@@ -185,6 +185,26 @@ def test_first_response_timeout_unloads_worker(tmp_path):
         backend.close()
 
 
+def test_stall_after_first_token_preserves_partial_answer_and_releases_model(tmp_path):
+    backend, session, _ = make_runtime(tmp_path, token_timeout=0.2)
+    with SqliteStore(tmp_path / "data.db") as store:
+        library = LibraryService(store)
+        errors = []
+        chat = ChatService(library, session, on_error=lambda cid, error: errors.append(error))
+        cid = library.create_conversation(model=model("partial").ref).summary.id
+        try:
+            chat.send(cid, "Read the document")
+            chat._worker_thread.join(5)
+            assert not chat._worker_thread.is_alive()
+            assert errors[0].code == "load_timeout"
+            assert library.get_conversation(cid).messages[-1].content == "Saved partial response"
+            assert session.status().loaded is None
+            assert not session.status().generating
+            assert backend._process is None
+        finally:
+            backend.close()
+
+
 def test_queued_cancel_does_not_start_a_process(tmp_path):
     backend, session, marker = make_runtime(tmp_path)
     store = SqliteStore(tmp_path / "data.db")

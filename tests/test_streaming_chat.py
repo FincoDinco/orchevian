@@ -569,6 +569,13 @@ def test_caret_hides_when_scrolled_out_of_view() -> None:
     host.close()
 
 
+def test_empty_response_is_waiting_not_thinking():
+    from llm_manager_app.widgets.transcript import split_thinking
+
+    assert split_thinking("", streaming=True) == ("", "", False)
+    assert split_thinking("<thi", streaming=True) == ("", "", True)
+
+
 def test_thinking_stream_is_collapsed_and_stored_verbatim():
     _qapp()
     from PySide6.QtCore import QUrl

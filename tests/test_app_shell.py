@@ -644,7 +644,7 @@ def _list_titles(window) -> list[str]:
     return [str(model.data(model.index(row, 0)) or "") for row in range(model.rowCount())]
 
 
-def test_sidebar_project_folders_hide_templates(tmp_path: Path) -> None:
+def test_sidebar_project_folders_and_templates(tmp_path: Path) -> None:
     try:
         _qapp()
     except Exception as exc:
@@ -659,13 +659,12 @@ def test_sidebar_project_folders_hide_templates(tmp_path: Path) -> None:
         assert tree is not None
         labels = _sidebar_labels(window._sidebar)
         assert labels == [
-            "Chats", "Models", "Second Brain", "Projects"
+            "Chats", "Models", "Second Brain", "Templates", "Projects"
         ]
-        assert "Templates" not in labels
         window._sidebar.new_project(name="Work")
         labels = _sidebar_labels(window._sidebar)
         assert labels == [
-            "Chats", "Models", "Second Brain", "Projects", "Work"
+            "Chats", "Models", "Second Brain", "Templates", "Projects", "Work"
         ]
         assert window._sidebar.current_selection().project_id == library.list_projects()[0].id
     finally:

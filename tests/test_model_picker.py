@@ -20,6 +20,7 @@ from llm_engine.domain.models import (
 )
 from llm_engine.store.library import LibraryService
 from llm_engine.store.sqlite import SqliteStore
+from llm_manager_app.model_names import BACKEND_ORDER
 
 OLLAMA_DOWN = "Ollama is not running at 127.0.0.1:11434"
 REF = ModelRef(BackendName.OLLAMA, "fake")
@@ -76,6 +77,8 @@ def _conv(cid: int = 1, model: ModelRef | None = None) -> Conversation:
 
 
 def _window(tmp_path: Path, fake: FakeBackend | list[FakeBackend] | None = None):
+    from PySide6.QtCore import QSettings
+
     from llm_manager_app.main_window import MainWindow
 
     store, library = _library(tmp_path)
@@ -87,7 +90,8 @@ def _window(tmp_path: Path, fake: FakeBackend | list[FakeBackend] | None = None)
     else:
         backends = [fake]
     registry = BackendRegistry(backends)
-    window = MainWindow(registry=registry, library=library)
+    settings = QSettings(str(tmp_path / "gui.ini"), QSettings.Format.IniFormat)
+    window = MainWindow(registry=registry, library=library, settings=settings)
     return window, store, library, backends
 
 
@@ -118,16 +122,18 @@ def test_picker_grouped_by_backend_and_set_model(tmp_path: Path) -> None:
         texts = [action.text() for action in menu.actions()]
         assert "Ollama" in texts
         assert "MLX" in texts
-        assert "Fake" in texts
-        assert "Qwen 3 · 8B" in texts
-        assert "Qwen 2 · 7B" in texts
+        assert "Fake · Ollama" in texts
+        assert "Qwen 3 · 8B · Ollama" in texts
+        assert "Qwen 2 · 7B · MLX" in texts
         assert "Manage Models…" in texts
         ollama_at = texts.index("Ollama")
         mlx_at = texts.index("MLX")
-        assert ollama_at < texts.index("Fake") < mlx_at < texts.index("Qwen 2 · 7B")
+        assert ollama_at < texts.index("Fake · Ollama") < texts.index("Qwen 3 · 8B · Ollama")
+        assert mlx_at < texts.index("Qwen 2 · 7B · MLX")
+        assert (ollama_at < mlx_at) == (BACKEND_ORDER.index("ollama") < BACKEND_ORDER.index("mlx"))
 
         for action in menu.actions():
-            if action.text() == "Qwen 3 · 8B":
+            if action.data() == QWEN.ref:
                 action.trigger()
                 break
         else:
@@ -368,10 +374,10 @@ def test_picker_disabled_until_catalog_ready() -> None:
         assert send is not None and not send.isEnabled()
         menu = picker.menu()
         assert menu is not None
-        assert "Fake" not in [action.text() for action in menu.actions()]
+        assert LOCAL.ref not in [action.data() for action in menu.actions()]
         view.set_catalog([LOCAL], {"ollama": (True, None)})
         assert picker.isEnabled()
         assert picker.has_models()
-        assert "Fake" in [action.text() for action in menu.actions()]
+        assert LOCAL.ref in [action.data() for action in menu.actions()]
     finally:
         view.close()

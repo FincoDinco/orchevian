@@ -10,7 +10,10 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-MIGRATION_FILES = ("001_baseline.py", "002_indexes.py")
+MIGRATION_FILES = (
+    "001_baseline.py", "002_indexes.py", "003_documents.py", "004_project_documents.py",
+    "005_visual_documents.py", "006_artifacts.py", "007_web_search.py",
+)
 BACKUP_SUFFIX = ".bak-pre-engine"
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"

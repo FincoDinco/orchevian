@@ -415,6 +415,20 @@ def test_mlx_load_imports_inside_load(tmp_path: Path, monkeypatch: pytest.Monkey
     backend.unload(handle)
 
 
+def test_mlx_disables_optional_thinking_for_document_questions():
+    from llm_engine.backends.mlx import _chat_prompt
+
+    def apply(messages, **kwargs):
+        assert kwargs["enable_thinking"] is False
+        assert kwargs["add_generation_prompt"] is True
+        assert messages[-1]["content"] == "Summarize the attached PDF"
+        return "direct answer prompt"
+
+    tokenizer = SimpleNamespace(chat_template="{% if enable_thinking %}", apply_chat_template=apply)
+    assert _chat_prompt(tokenizer, [ChatTurn("user", "Summarize the attached PDF")]) == (
+        "direct answer prompt"
+    )
+
 def test_mlx_unload_clears_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     from llm_engine.backends.mlx import MLXBackend
     from llm_engine.backends.protocol import ModelHandle

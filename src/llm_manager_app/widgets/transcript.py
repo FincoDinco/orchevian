@@ -39,7 +39,7 @@ def split_thinking(text: str, *, streaming: bool = False) -> tuple[str, str, boo
     """Separate an explicit leading reasoning block without changing the stored response."""
     stripped = text.lstrip()
     tags = ("<think>", "<thinking>", "<analysis>")
-    if streaming and any(tag.startswith(stripped.lower()) for tag in tags):
+    if streaming and stripped and any(tag.startswith(stripped.lower()) for tag in tags):
         return "", "", True
     match = re.match(r"<(think|thinking|analysis)>", stripped, re.I)
     if match is None:

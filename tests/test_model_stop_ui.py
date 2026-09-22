@@ -59,6 +59,9 @@ def test_stop_load_keeps_gui_responsive_and_allows_retry(tmp_path, control):
         window._models._load_btn.click()
         wait_until(marker.exists)
         wait_until(lambda: window._force_stop.isVisible())
+        assert not window.statusBar().isVisible()
+        assert window._workspace_toolbar.isAncestorOf(window._force_stop)
+        assert "Loading" in window._model_activity.label.text()
         assert window._models._stop_btn.isVisible()
         before = len(beats)
         wait_until(lambda: len(beats) >= before + 3)
@@ -68,7 +71,13 @@ def test_stop_load_keeps_gui_responsive_and_allows_retry(tmp_path, control):
             QTest.keyClick(window, Qt.Key.Key_Escape)
         else:
             window._sidebar.select_section(CHATS)
+            assert window._force_stop.isEnabled(), (
+                window._stop_requested, window._model_activity.isEnabled(),
+                window._workspace_toolbar.isEnabled(), window._session.status(),
+            )
             window._force_stop.click()
+            assert window._stop_requested
+            assert window._model_load_cancel.is_set()
         wait_until(lambda: window._models.job_kind() is None)
         assert not window._session.status().generating
         assert not window._chat_service._generating

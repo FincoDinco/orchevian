@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QMainWindow,
-    QPushButton,
+    QMessageBox,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
@@ -30,6 +30,7 @@ from llm_engine.domain.models import ModelRef
 from llm_engine.services.catalog import CatalogService
 from llm_engine.services.chat import ChatService
 from llm_engine.services.memory import CaptureResult
+from llm_engine.services.openai_api import ApiServerService
 from llm_engine.services.session import ModelSession
 from llm_engine.store.library import LibraryService
 from llm_engine.store.vault import MemoryVault
@@ -66,9 +67,11 @@ from llm_manager_app.widgets.sidebar import (
     MODELS,
     PRIVATE,
     SETTINGS,
+    TEMPLATES,
     Sidebar,
     SidebarSelection,
 )
+from llm_manager_app.widgets.templates_view import TemplatesView
 from llm_manager_app.workers import (
     CatalogWorker,
     ChatWorker,
@@ -91,8 +94,8 @@ def _default_library() -> tuple[ConversationStore, object]:
 class MainWindow(QMainWindow):
     memory_requested = Signal(int, object, object)
     model_load_requested = Signal(object, object)
-    chat_send_requested = Signal(int, str, object, object)
-    chat_regenerate_requested = Signal(int, object, object)
+    chat_send_requested = Signal(int, str, object, object, object, bool)
+    chat_regenerate_requested = Signal(int, object, object, object, bool)
 
     def __init__(
         self,
@@ -150,6 +153,8 @@ class MainWindow(QMainWindow):
         self._memory_vault = memory_vault or MemoryVault(Path(str(vault_path)))
 
         self._chat_service: ChatService | None = None
+        self._api: ApiServerService | None = None
+        self._api_busy = False
         self._worker: ChatWorker | None = None
         self._worker_thread: QThread | None = None
         self._catalog: CatalogWorker
@@ -166,6 +171,7 @@ class MainWindow(QMainWindow):
             self._worker_thread, self._worker = start_chat_worker(
                 self._chat_service, self, session=self._session
             )
+            self._api = ApiServerService(self._chat_service, self._catalog_service)
 
         shell = QWidget(self)
         shell.setObjectName("shell")
@@ -210,6 +216,11 @@ class MainWindow(QMainWindow):
         self._workspace_layout.addWidget(self._detail_stack, 1)
         self._detail_stack.setObjectName("detailPane")
         self._chat_view = ChatView(self._detail_stack, names=self._model_names)
+        if self._chat_service is not None:
+            self._chat_view.attachments.service = self._chat_service.documents
+            self._chat_view.artifacts.service = self._chat_service.artifacts
+            self._chat_view.web_sources.service = self._chat_service.web
+            self._chat_view.composer()._attach.show()
         self._chat_view.new_chat_requested.connect(lambda: self._list.new_chat())
         self._chat_view.stop_requested.connect(self._on_stop)
         self._chat_view.turn_finished.connect(self._on_turn_finished)
@@ -222,11 +233,21 @@ class MainWindow(QMainWindow):
             self._catalog.list_models, Qt.ConnectionType.QueuedConnection
         )
         self._catalog.listed.connect(self._on_catalog_listed)
+        self._catalog.storage_updated.connect(self._models.storage.apply_summary)
         self._catalog.failed.connect(self._on_catalog_failed)
         self._detail_stack.addWidget(self._chat_view)
+        self._templates = None
+        if isinstance(self._library, LibraryService):
+            self._templates = TemplatesView(self._detail_stack, library=self._library)
+            self._templates.use_requested.connect(self._use_template)
+            self._detail_stack.addWidget(self._templates)
         self._project_home = ProjectHome(
             self._detail_stack, library=self._library, names=self._model_names,
+            documents=self._chat_service.documents if self._chat_service is not None else None,
         )
+        self._project_home.files.files_changed.connect(self._chat_view.attachments.refresh)
+        self._chat_view.artifacts.project_changed.connect(self._project_home.files.refresh)
+        self._chat_view.artifacts.project_changed.connect(self._chat_view.attachments.refresh)
         self._detail_stack.addWidget(self._project_home)
         self._project_home.start_requested.connect(self._start_project_chat)
         self._project_home.conversation_requested.connect(self._open_project_chat)
@@ -283,6 +304,8 @@ class MainWindow(QMainWindow):
             self._worker.rejected.connect(self._chat_view.on_rejected)
             self._worker.rejected.connect(self._on_chat_busy_ended)
             self._worker.token.connect(self._chat_view.on_token)
+            self._worker.artifact_progress.connect(self._on_artifact_progress)
+            self._worker.web_progress.connect(self._chat_view.on_web_progress)
             self._worker.done.connect(self._chat_view.on_done)
             self._worker.done.connect(self._on_chat_busy_ended)
             self._worker.done.connect(self._schedule_automatic_memory)
@@ -308,11 +331,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(shell)
         self._splitter = splitter
 
-        self._force_stop = QPushButton("Force stop model", self)
-        self._force_stop.setObjectName("forceStopModelButton")
-        self._force_stop.setToolTip("Stop model loading or inference and release its memory")
-        self._force_stop.clicked.connect(self._force_stop_model)
-        self.statusBar().addPermanentWidget(self._force_stop)
         self.statusBar().hide()
         self._model_status_timer = QTimer(self)
         self._model_status_timer.setInterval(100)
@@ -339,9 +357,32 @@ class MainWindow(QMainWindow):
         self._on_selected(self._list.selected_id())
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._templates is not None and not self._templates.prepare_close():
+            event.ignore()
+            return
         if not self._memory.prepare_close():
             event.ignore()
             return
+        if not self._chat_view.attachments.shutdown():
+            self._chat_view.show_banner("Finishing document cancellation. Close again in a moment.")
+            event.ignore()
+            return
+        if not self._project_home.files.shutdown():
+            self._project_home.status.setText(
+                "Finishing file cancellation. Close again in a moment."
+            )
+            self._project_home.status.show()
+            event.ignore()
+            return
+        if self._settings_dialog is not None:
+            self._settings_dialog.wait_for_api_change()
+        if self._api is not None:
+            try:
+                self._api.stop()
+            except EngineError as exc:
+                QMessageBox.warning(self, "API is still stopping", str(exc))
+                event.ignore()
+                return
         self._closing = True
         self._auto_memory_timer.stop()
         self._pending_memories.clear()
@@ -386,6 +427,8 @@ class MainWindow(QMainWindow):
                 self._worker.catalog_failed,
                 self._worker.memories_created,
                 self._worker.memories_failed,
+                self._worker.artifact_progress,
+                self._worker.web_progress,
             ):
                 try:
                     sig.disconnect()
@@ -412,6 +455,7 @@ class MainWindow(QMainWindow):
                 pass
             try:
                 self._catalog.listed.disconnect()
+                self._catalog.storage_updated.disconnect()
                 self._catalog.failed.disconnect()
             except RuntimeError:
                 pass
@@ -467,6 +511,12 @@ class MainWindow(QMainWindow):
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._workspace_layout.insertWidget(0, toolbar)
         self._workspace_toolbar = toolbar
+        from llm_manager_app.widgets.model_activity import ModelActivity
+
+        self._model_activity = ModelActivity(toolbar)
+        self._model_activity.stop_requested.connect(self._force_stop_model)
+        self._force_stop = self._model_activity.stop
+        self._model_activity_action = toolbar.addWidget(self._model_activity)
         spacer = QWidget(toolbar)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
@@ -581,6 +631,11 @@ class MainWindow(QMainWindow):
         memory_act.setShortcut(QKeySequence("Ctrl+3"))
         memory_act.triggered.connect(lambda: self._sidebar.select_section(MEMORY))
         view_menu.addAction(memory_act)
+        if self._templates is not None:
+            templates_act = QAction("Templates", self)
+            templates_act.setShortcut(QKeySequence("Ctrl+5"))
+            templates_act.triggered.connect(lambda: self._sidebar.select_section(TEMPLATES))
+            view_menu.addAction(templates_act)
         downloads_act = QAction("Downloads", self)
         downloads_act.setShortcut(QKeySequence("Ctrl+4"))
         downloads_act.triggered.connect(self._show_downloads)
@@ -703,7 +758,8 @@ class MainWindow(QMainWindow):
 
     def _start_project_chat(self, pid, text, ref):
         self._sync_model_activity()
-        if self._project_home._busy or self._private_id is not None:
+        if (self._project_home._busy or self._project_home.files.busy()
+                or self._private_id is not None):
             return
         try:
             conversation = self._library.create_conversation(project_id=pid, model=ref)
@@ -714,6 +770,12 @@ class MainWindow(QMainWindow):
         self._list.refresh(select_id=conversation.summary.id)
         self._show_selected_chat()
         self._chat_view.composer().set_text(text)
+        self._chat_view.composer().create_files.setChecked(
+            self._project_home.composer.create_files.isChecked()
+        )
+        self._chat_view.composer().web_search.setChecked(
+            self._project_home.composer.web_search.isChecked()
+        )
         self._chat_view.composer().submit()
         # A rejected send retains its text in the regular chat's recovery path.
         self._project_home.sent()
@@ -731,6 +793,7 @@ class MainWindow(QMainWindow):
                 names=self._model_names,
                 db_path=Path(db_path) if db_path is not None else None,
                 log_path=default_log_path(),
+                api=self._api,
             )
             self._settings_dialog.default_model_changed.connect(self._default_model_changed)
             self._settings_dialog.return_sends_changed.connect(
@@ -863,6 +926,9 @@ class MainWindow(QMainWindow):
             self._detail_stack.setCurrentWidget(self._memory)
             self._memory.refresh()
             self._sync_memory_available()
+        elif key == TEMPLATES and self._templates is not None:
+            self._detail_stack.setCurrentWidget(self._templates)
+            self._templates.refresh()
         else:
             self._detail_stack.setCurrentWidget(self._chat_view)
         self._sync_sidebar_size()
@@ -905,6 +971,9 @@ class MainWindow(QMainWindow):
         self._list.delete_selected()
 
     def _focus_search(self) -> None:
+        if self._sidebar.current_section() == TEMPLATES and self._templates is not None:
+            self._templates.focus_search()
+            return
         if self._sidebar.current_section() == MEMORY:
             self._memory.focus_search()
             return
@@ -921,6 +990,22 @@ class MainWindow(QMainWindow):
             self._project_home.composer.focus_edit()
         else:
             self._chat_view.focus_composer()
+
+    def _use_template(self, template_id: int) -> None:
+        if self._private_id is not None:
+            return
+        try:
+            template = self._library.get_template(template_id)
+            conversation = self._library.create_conversation(template_id=template_id)
+        except Exception as exc:
+            self._templates._status.setText(str(exc))
+            return
+        self._chat_view.inspector().flush_prompt()
+        self._sidebar.select_all()
+        self._list.refresh(select_id=conversation.summary.id)
+        self._show_selected_chat()
+        self._chat_view.composer().set_text(template.user_prompt)
+        self._chat_view.focus_composer()
 
     def _rescan_catalog(self) -> None:
         if not self._models.refresh():
@@ -964,12 +1049,23 @@ class MainWindow(QMainWindow):
     def _queue_send(self, cid: int, text: str, params: object) -> None:
         self._stop_requested = False
         self._chat_cancel = threading.Event()
-        self.chat_send_requested.emit(cid, text, params, self._chat_cancel)
+        self.chat_send_requested.emit(
+            cid, text, params, self._chat_cancel, self._chat_view.artifacts.request(),
+            self._chat_view.composer().web_search.isChecked(),
+        )
 
     def _queue_regenerate(self, cid: int, params: object) -> None:
         self._stop_requested = False
         self._chat_cancel = threading.Event()
-        self.chat_regenerate_requested.emit(cid, params, self._chat_cancel)
+        self.chat_regenerate_requested.emit(
+            cid, params, self._chat_cancel, self._chat_view.artifacts.request(),
+            self._chat_view.composer().web_search.isChecked(),
+        )
+
+    def _on_artifact_progress(self, cid, message):
+        if self._chat_view.conversation_id() == cid and self._chat_view.is_streaming(cid):
+            self._chat_view.artifacts.notice.setText(message)
+            self._chat_view.artifacts.show()
 
     def _sync_model_activity(self) -> None:
         if self._closing:
@@ -982,20 +1078,42 @@ class MainWindow(QMainWindow):
             or self._chat_view._pending is not None
         )
         self._project_home.set_busy(busy)
-        self.statusBar().setVisible(busy)
-        self._force_stop.setEnabled(busy and not self._stop_requested)
+        api_busy = bool(self._api and self._api.status()["active_requests"])
+        if api_busy or self._api_busy:
+            self._chat_view.set_session_busy(
+                api_busy or self._memory_busy or self._models.job_kind() in {"load", "unload"}
+            )
+            self._models.set_chat_busy(busy)
+            self._models.sync_from_session()
+            self._sync_memory_available()
+        self._api_busy = api_busy
+        private = self._private_id is not None
+        self._workspace_toolbar.setVisible(not private or busy)
+        self._private_button.setVisible(not private)
+        self._download_button.setVisible(not private)
         self._force_stop_action.setEnabled(busy and not self._stop_requested)
+        self._model_activity_action.setEnabled(True)
+        self._model_activity_action.setVisible(busy)
         if not busy:
             self._stop_requested = False
         message = (
             "Stopping model…"
             if self._stop_requested
-            else f"Loading {status.loading.name}…"
+            else f"Loading {self._model_names.display(status.loading)}…"
             if status.loading is not None
-            else "Organizing chat memories in Second Brain…" if self._memory_busy
-            else "Model working…"
+            else "Loading model…" if self._models.job_kind() == "load"
+            else "Unloading model…" if self._models.job_kind() == "unload"
+            else "Remembering this chat…" if self._memory_busy
+            else "Responding to API…" if api_busy
+            else "Model is thinking…" if self._chat_view._transcript._reasoning_active
+            else "Reading document context…" if not self._chat_view._buffer and (
+                self._chat_view.attachments is not None
+                and self._chat_view.attachments.has_documents()
+            )
+            else "Waiting for model…" if not self._chat_view._buffer
+            else "Generating response…"
         )
-        self.statusBar().showMessage(message)
+        self._model_activity.set_activity(busy, message, self._stop_requested)
 
     def _force_stop_model(self) -> None:
         if self._closing or self._stop_requested:

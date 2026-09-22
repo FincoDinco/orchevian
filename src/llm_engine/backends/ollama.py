@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
@@ -12,6 +14,7 @@ import httpx
 
 from llm_engine.backends.protocol import ModelHandle
 from llm_engine.domain.errors import EngineError
+from llm_engine.domain.images import validate_image_inputs
 from llm_engine.domain.models import (
     BackendName,
     CancelToken,
@@ -59,9 +62,7 @@ def _handle_options(handle: LoadedHandle) -> LoadOptions:
     return LoadOptions()
 
 
-def _close_on_cancel(
-    response: httpx.Response, cancel: CancelToken, stop: threading.Event
-) -> None:
+def _close_on_cancel(response: httpx.Response, cancel: CancelToken, stop: threading.Event) -> None:
     while not stop.is_set():
         if cancel.is_set():
             try:
@@ -98,6 +99,23 @@ class OllamaBackend:
         else:
             self._client = client
             self._owns_client = False
+        self._capabilities: dict[str, tuple[object, bool | None]] = {}
+
+    def _supports_images(self, name, revision=None):
+        cached = self._capabilities.get(name)
+        if cached is not None and revision is not None and cached[0] == revision:
+            return cached[1]
+        try:
+            response = self._client.post("/api/show", json={"model": name}, timeout=2.0)
+            response.raise_for_status()
+            payload = response.json()
+            capabilities = payload.get("capabilities")
+            result = "vision" in capabilities if isinstance(capabilities, list) else None
+        except (httpx.HTTPError, ValueError, AttributeError):
+            result = None
+        if result is not None and revision is not None:
+            self._capabilities[name] = (revision, result)
+        return result
 
     def close(self) -> None:
         if self._owns_client:
@@ -149,12 +167,15 @@ class OllamaBackend:
                     size_bytes=size_bytes,
                     modified_at=_parse_modified(item.get("modified_at")),
                     details=_str_details(item.get("details")),
+                    supports_images=self._supports_images(str(item["name"]), item.get("digest")),
                 )
             )
         return models
 
     def load(self, model: LocalModel, options: LoadOptions | None = None) -> ModelHandle:
         options = options or LoadOptions()
+        if model.supports_images is None:
+            model = replace(model, supports_images=self._supports_images(model.ref.name))
         self._model_request(
             {"model": model.ref.name, "stream": False, "options": {"num_ctx": options.n_ctx}},
             timeout=120.0,
@@ -196,9 +217,31 @@ class OllamaBackend:
         params: GenerationParams,
         cancel: CancelToken,
     ) -> Iterator[str]:
+        if cancel.is_set():
+            return
+        validate_image_inputs(messages)
+        if any(turn.images for turn in messages):
+            # Confirm actual runtime capability instead of inferring it from a model name.
+            if self._supports_images(handle.model.ref.name) is not True:
+                raise EngineError(
+                    "vision_required",
+                    "This Ollama model does not report vision "
+                    "support. Select a vision model or use extracted text only.",
+                )
         payload: dict[str, Any] = {
             "model": handle.model.ref.name,
-            "messages": [{"role": turn.role, "content": turn.content} for turn in messages],
+            "messages": [
+                dict(
+                    role=turn.role,
+                    content=turn.content,
+                    **(
+                        {"images": [base64.b64encode(data).decode("ascii") for data in turn.images]}
+                        if turn.images
+                        else {}
+                    ),
+                )
+                for turn in messages
+            ],
             "stream": True,
             "think": False,
             "options": {

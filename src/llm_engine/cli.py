@@ -1,21 +1,34 @@
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 
 from llm_engine import config
 from llm_engine.backends.registry import BackendRegistry
 from llm_engine.domain.errors import EngineError
+from llm_engine.domain.models import GenerationParams
 from llm_engine.logging import setup_logging
+from llm_engine.services.catalog import CatalogService
+from llm_engine.services.chat import ChatService
+from llm_engine.services.openai_api import ApiServerService, parse_model_id
+from llm_engine.services.session import ModelSession
+from llm_engine.store.library import LibraryService
+from llm_engine.store.sqlite import SqliteStore, backup_path_for
 
 
 def build_parser() -> argparse.ArgumentParser:
     shared = argparse.ArgumentParser(add_help=False)
-    shared.add_argument("--db", type=Path, default=None, help="Path to data.db")
-    shared.add_argument("--config", type=Path, default=None, help="Path to config.json")
-    shared.add_argument("-v", "--verbose", action="store_true", help="DEBUG logging")
+    shared.add_argument("--db", type=Path, default=argparse.SUPPRESS, help="Path to data.db")
+    shared.add_argument(
+        "--config", type=Path, default=argparse.SUPPRESS, help="Path to config.json"
+    )
+    shared.add_argument(
+        "-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help="DEBUG logging"
+    )
 
     parser = argparse.ArgumentParser(
         prog="orchevian-engine",
@@ -24,7 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("chat", parents=[shared], help="Interactive chat (TTY)")
+    chat = sub.add_parser("chat", parents=[shared], help="Interactive chat (TTY)")
+    chat.add_argument("--model", help="Model ID from the models command (backend/name)")
+    chat.add_argument("--conversation", type=int, help="Resume a saved conversation")
+    chat.add_argument("--max-tokens", type=int, default=2048, help="Maximum generated tokens")
     sub.add_parser("models", parents=[shared], help="List local models")
     serve = sub.add_parser("serve", parents=[shared], help="OpenAI-compatible HTTP API")
     serve.add_argument("--port", type=int, default=None, help="Bind port (host is 127.0.0.1)")
@@ -33,18 +49,119 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _unimplemented(command: str) -> int:
-    print(f"orchevian-engine {command}: not implemented", file=sys.stderr)
-    return 1
-
-
 def _cmd_health(args: argparse.Namespace) -> int:
     cfg = config.load(args.config, args.db)
     print(f"db: {cfg.db_path}")
     print(f"config: {cfg.config_path}")
     print(f"model_dir: {cfg.model_dir}")
-    print(f"api: {cfg.api_host}:{cfg.api_port} (stopped)")
-    print("loaded: none")
+    print(f"api configured: {cfg.api_host}:{cfg.api_port}")
+    print("live session: not inspected (use the running app's Settings → API)")
+    return 0
+
+
+def _cmd_migrate(args: argparse.Namespace) -> int:
+    cfg = config.load(args.config, args.db)
+    with SqliteStore(cfg.db_path) as store:
+        print(f"db: {store.path}")
+        print(f"schema version: {store.schema_version()}")
+    backup = backup_path_for(cfg.db_path)
+    if backup.exists():
+        print(f"pre-engine backup: {backup}")
+    return 0
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    cfg = config.load(args.config, args.db)
+    registry = BackendRegistry(cfg=cfg)
+    session = ModelSession(registry)
+    stopped = threading.Event()
+    previous_term = signal.signal(signal.SIGTERM, lambda *_args: stopped.set())
+    # API inference is stateless; an in-memory library keeps serve off the user's DB.
+    with SqliteStore(":memory:") as store:
+        chat = ChatService(LibraryService(store), session)
+        api = ApiServerService(chat, CatalogService(registry, session), port=cfg.api_port)
+        try:
+            status = api.start(port=args.port)
+            print(f"Local API: {status['url']} (Ctrl+C to stop)", flush=True)
+            while api.status()["running"] and not stopped.wait(0.2):
+                pass
+        except KeyboardInterrupt:
+            pass
+        finally:
+            try:
+                api.stop()
+            finally:
+                registry.close()
+                signal.signal(signal.SIGTERM, previous_term)
+    return 0
+
+
+def _cmd_chat(args: argparse.Namespace) -> int:
+    if args.max_tokens < 1:
+        raise EngineError("config_invalid", "--max-tokens must be positive")
+    cfg = config.load(args.config, args.db)
+    registry = BackendRegistry(cfg=cfg)
+    session = ModelSession(registry)
+    with SqliteStore(cfg.db_path) as store:
+        library = LibraryService(store)
+        chat = ChatService(library, session)
+        try:
+            model = parse_model_id(args.model) if args.model else None
+            if args.conversation is not None:
+                conv = library.get_conversation(args.conversation)
+                model = model or conv.summary.model
+            else:
+                conv = None
+            if model is None:
+                models, _availability = registry.list_models()
+                available = [m for m in models if m.available]
+                if len(available) == 1:
+                    model = available[0].ref
+                else:
+                    choices = ", ".join(m.ref.id for m in available) or "none available"
+                    raise EngineError("no_model", f"Choose --model backend/name. Models: {choices}")
+            # Validate and load before creating an empty saved conversation.
+            chat.catalog_load(model)
+            if conv is None:
+                conv = library.create_conversation(model=model)
+            elif model != conv.summary.model:
+                chat.set_model(conv.summary.id, model)
+            cid = conv.summary.id
+            print(f"Conversation {cid} · {model.id}. /exit to quit; Ctrl+C stops a response.")
+            for turn in conv.messages:
+                print(f"{turn.role}: {turn.content}")
+            errors = []
+            chat.on_token = lambda _cid, token: print(token, end="", flush=True)
+            chat.on_error = lambda _cid, error: errors.append(error)
+            while True:
+                try:
+                    prompt = input("You: ")
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    break
+                if prompt.strip() in {"/exit", "/quit"}:
+                    break
+                if not prompt.strip():
+                    continue
+                errors.clear()
+                print("Assistant: ", end="", flush=True)
+                chat.send(cid, prompt, GenerationParams(max_tokens=args.max_tokens))
+                try:
+                    while chat._worker_thread.is_alive():
+                        chat._worker_thread.join(0.1)
+                except KeyboardInterrupt:
+                    chat.cancel_current()
+                    chat._worker_thread.join(5)
+                    if chat._worker_thread.is_alive():
+                        raise EngineError("cancelled", "Model is still stopping. Exit and retry.")
+                print()
+                if errors:
+                    print(f"error: {errors[-1]}", file=sys.stderr)
+        finally:
+            chat.cancel_current()
+            if chat._worker_thread is not None:
+                chat._worker_thread.join(5)
+            registry.close()
     return 0
 
 
@@ -75,13 +192,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    if args.command == "health":
-        setup_logging(verbose=args.verbose)
-        return _cmd_health(args)
-    if args.command == "models":
-        setup_logging(verbose=args.verbose)
-        return _cmd_models(args)
-    return _unimplemented(args.command)
+    for key, default in (("config", None), ("db", None), ("verbose", False)):
+        vars(args).setdefault(key, default)
+    try:
+        cfg = config.load(args.config, args.db)
+        setup_logging(verbose=args.verbose, log_path=cfg.db_path.parent / "logs" / "engine.log")
+        return {
+            "health": _cmd_health,
+            "models": _cmd_models,
+            "migrate": _cmd_migrate,
+            "chat": _cmd_chat,
+            "serve": _cmd_serve,
+        }[args.command](args)
+    except (EngineError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

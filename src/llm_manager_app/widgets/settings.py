@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSettings, QUrl, Signal
+from PySide6.QtCore import QSettings, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -20,7 +22,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -48,6 +52,7 @@ _SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("Ctrl+2", "Models"),
     ("Ctrl+3", "Second Brain"),
     ("Ctrl+4", "Downloads"),
+    ("Ctrl+5", "Templates"),
     ("Ctrl+Meta+S" if sys.platform == "darwin" else "Ctrl+Shift+S", "Show or hide sidebar"),
     ("Ctrl+Shift+.", "Force stop model"),
     ("Ctrl+L", "Focus composer"),
@@ -131,6 +136,7 @@ def _open_path(path: Path) -> None:
 
 
 class SettingsDialog(QWidget):
+    api_finished = Signal(str)
     default_model_changed = Signal(object)
     back_requested = Signal()
     automatic_memory_changed = Signal(bool)
@@ -149,6 +155,7 @@ class SettingsDialog(QWidget):
         log_path: Path | str | None = None,
         open_path: Callable[[Path], None] | None = None,
         names=None,
+        api=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("settingsDialog")
@@ -156,6 +163,9 @@ class SettingsDialog(QWidget):
         self.resize(560, 400)
 
         self._settings = settings
+        self._api = api
+        self._api_task: threading.Thread | None = None
+        self.api_finished.connect(self._api_complete)
         self._names = names
         self._config_get = config_get or config.get
         self._config_set = config_set or config.set
@@ -167,6 +177,8 @@ class SettingsDialog(QWidget):
         tabs.setObjectName("settingsTabs")
         tabs.addTab(self._build_general(), "General")
         tabs.addTab(self._build_models(), "Models")
+        if self._api is not None:
+            tabs.addTab(self._build_api(), "API")
         tabs.addTab(self._build_advanced(), "Advanced")
 
         heading = QLabel("Settings", self)
@@ -204,6 +216,124 @@ class SettingsDialog(QWidget):
         self._automatic_memory.blockSignals(blocked)
         self._reload_engine_paths()
         self._models_error.hide()
+        if self._api is not None:
+            if not self._api.status()["running"] and self._api_task is None:
+                self._api_port.setValue(int(self._config_get().get("api_port", 8080)))
+            self._refresh_api()
+
+    def _build_api(self) -> QWidget:
+        page = QWidget(self)
+        self._api_enabled = QCheckBox("Enable local API", page)
+        self._api_enabled.setObjectName("apiEnabled")
+        self._api_enabled.toggled.connect(self._toggle_api)
+        self._api_port = QSpinBox(page)
+        self._api_port.setObjectName("apiPort")
+        self._api_port.setRange(1, 65535)
+        self._api_port.setValue(int(self._config_get().get("api_port", 8080)))
+        self._api_port.valueChanged.connect(self._refresh_api)
+        self._api_url = QLineEdit(page)
+        self._api_url.setObjectName("apiUrl")
+        self._api_url.setReadOnly(True)
+        copy = QPushButton("Copy URL", page)
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(self._api_url.text()))
+        self._api_status = QLabel("Stopped", page)
+        self._api_status.setObjectName("apiStatus")
+        self._api_status.setWordWrap(True)
+        hint = QLabel(
+            "Connect local tools using an OpenAI-compatible API. It shares the model with "
+            "chat and Second Brain, so only one request can run at a time. "
+            "API messages are not saved and do not use your notes. "
+            "The API is available only on this computer and starts disabled each launch.", page,
+        )
+        hint.setWordWrap(True)
+        self._api_example = QPlainTextEdit(page)
+        self._api_example.setObjectName("apiExample")
+        self._api_example.setReadOnly(True)
+        self._api_example.setMaximumHeight(115)
+        self._api_recent = QPlainTextEdit(page)
+        self._api_recent.setObjectName("apiRecentRequests")
+        self._api_recent.setReadOnly(True)
+        self._api_recent.setMaximumBlockCount(50)
+        layout = QVBoxLayout(page)
+        layout.addWidget(hint)
+        form = QFormLayout()
+        form.addRow(self._api_enabled)
+        form.addRow("Port", self._api_port)
+        row = QHBoxLayout()
+        row.addWidget(self._api_url)
+        row.addWidget(copy)
+        form.addRow("Base URL", row)
+        form.addRow("Status", self._api_status)
+        layout.addLayout(form)
+        layout.addWidget(QLabel("Try it in a terminal", page))
+        layout.addWidget(self._api_example)
+        layout.addWidget(QLabel("Recent requests (kept in memory; no message content)", page))
+        layout.addWidget(self._api_recent, 1)
+        self._api_timer = QTimer(self)
+        self._api_timer.setInterval(1000)
+        self._api_timer.timeout.connect(self._refresh_api)
+        self._api_timer.start()
+        return page
+
+    def _refresh_api(self, *_args) -> None:
+        if self._api is None:
+            return
+        status = self._api.status()
+        running = status["running"]
+        changing = self._api_task is not None
+        self._api_enabled.setEnabled(not changing)
+        self._api_port.setEnabled(not running and not changing)
+        if not changing:
+            blocked = self._api_enabled.blockSignals(True)
+            self._api_enabled.setChecked(running)
+            self._api_enabled.blockSignals(blocked)
+        port = status["port"] if running else self._api_port.value()
+        url = f"http://127.0.0.1:{port}/v1"
+        self._api_url.setText(url)
+        example = (f"curl {url}/models\n\n"
+                   f"curl {url}/chat/completions -H 'Content-Type: application/json' "
+                   "-d '{\"model\":\"ollama/MODEL_NAME\",\"messages\":["
+                   "{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}'")
+        if self._api_example.toPlainText() != example:
+            self._api_example.setPlainText(example)
+        recent = "\n".join(
+            f"{r['status']}  {r['method']} {r['path']}  ({r['elapsed_ms']} ms to headers)"
+            for r in reversed(status["recent_requests"])
+        )
+        if self._api_recent.toPlainText() != recent:
+            self._api_recent.setPlainText(recent)
+
+    def _toggle_api(self, enabled: bool) -> None:
+        if self._api_task is not None:
+            return
+        port = self._api_port.value()
+        self._api_status.setText("Starting…" if enabled else "Stopping…")
+
+        def change() -> None:
+            error = ""
+            try:
+                if enabled:
+                    self._config_set(api_port=port)
+                    self._api.start(port=port)
+                else:
+                    self._api.stop()
+            except Exception as exc:
+                error = str(exc)
+            self.api_finished.emit(error)
+
+        self._api_task = threading.Thread(target=change, daemon=True, name="api-settings")
+        self._api_task.start()
+        self._refresh_api()
+
+    def _api_complete(self, error: str) -> None:
+        self._api_task = None
+        status = "Running" if self._api.status()["running"] else "Stopped"
+        self._api_status.setText(error or status)
+        self._refresh_api()
+
+    def wait_for_api_change(self) -> None:
+        if self._api_task is not None:
+            self._api_task.join()
 
     def _build_general(self) -> QWidget:
         page = QWidget(self)

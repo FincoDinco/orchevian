@@ -63,15 +63,31 @@ def _mlx_details(path: Path) -> dict[str, str]:
     if not isinstance(raw, dict):
         return {}
     details: dict[str, str] = {}
+    text_config = raw.get("text_config")
+    language = text_config if isinstance(text_config, dict) else raw
     mapping = (
         ("max_position_embeddings", "context_length"),
         ("hidden_size", "hidden_size"),
         ("num_hidden_layers", "num_layers"),
     )
     for src, dest in mapping:
-        value = raw.get(src)
+        value = language.get(src, raw.get(src))
         if value is not None:
             details[dest] = str(value)
+    architecture = language.get("model_type", raw.get("model_type"))
+    if isinstance(architecture, str):
+        details["architecture"] = architecture
+    quant = raw.get("quantization") or raw.get("quantization_config")
+    if isinstance(quant, dict):
+        bits = quant.get("bits")
+        if isinstance(bits, int) and not isinstance(bits, bool):
+            details["quantization"] = f"{bits}-bit"
+        if isinstance(quant.get("group_size"), int):
+            details["quantization_group_size"] = str(quant["group_size"])
+    dtype = language.get("dtype", language.get("torch_dtype", raw.get("dtype")))
+    if isinstance(dtype, str):
+        details["weight_dtype"] = dtype
+    details["runtime"] = "MLX · Apple Silicon / Metal"
     return details
 
 
@@ -82,7 +98,11 @@ def _chat_prompt(tokenizer: object, messages: list[ChatTurn]) -> str:
         tokenizer, "has_chat_template", getattr(tokenizer, "chat_template", True)
     )
     if callable(apply) and has_template:
-        return str(apply(payload, tokenize=False, add_generation_prompt=True))
+        # Match Ollama's direct-answer default. Qwen templates otherwise open a
+        # thinking block that can consume the entire reply budget on long inputs.
+        template = getattr(tokenizer, "chat_template", "")
+        kwargs = {"enable_thinking": False} if "enable_thinking" in str(template) else {}
+        return str(apply(payload, tokenize=False, add_generation_prompt=True, **kwargs))
     return "".join(f"{turn.role}: {turn.content}\n" for turn in messages) + "assistant: "
 
 
@@ -91,6 +111,60 @@ def _delta_text(response: object) -> str:
         return response
     text = getattr(response, "text", None)
     return text if isinstance(text, str) else ""
+
+
+def _clean_stream(responses, tokenizer, cancel):
+    """Keep EOS markers out of replies, including markers split across deltas."""
+    eos = getattr(tokenizer, "eos_token", None)
+    pending = ""
+    try:
+        for response in responses:
+            if cancel.is_set():
+                return
+            pending += _delta_text(response)
+            if not isinstance(eos, str) or not eos:
+                if pending:
+                    yield pending
+                    pending = ""
+                continue
+            end = pending.find(eos)
+            if end >= 0:
+                if end:
+                    yield pending[:end]
+                return
+            keep = next((n for n in range(min(len(eos) - 1, len(pending)), 0, -1)
+                         if pending.endswith(eos[:n])), 0)
+            ready = pending[:-keep] if keep else pending
+            pending = pending[-keep:] if keep else ""
+            if ready:
+                yield ready
+        if pending and not cancel.is_set():
+            yield pending
+    finally:
+        close = getattr(responses, "close", None)
+        if callable(close):
+            close()
+
+
+def _generation_input(handle, tokenizer, messages, params):
+    prompt = _chat_prompt(tokenizer, messages)
+    options = getattr(handle, "options", LoadOptions())
+    limit = options.n_ctx
+    native = handle.model.details.get("context_length", "")
+    if native.isdigit() and int(native) > 0:
+        limit = min(limit, int(native))
+    kwargs = {"max_tokens": params.max_tokens, "max_kv_size": limit, "prefill_step_size": 512}
+    encode = getattr(tokenizer, "encode", None)
+    if callable(encode):
+        bos = getattr(tokenizer, "bos_token", None)
+        prompt = encode(prompt, add_special_tokens=not bos or not prompt.startswith(bos))
+        if len(prompt) >= limit:
+            raise EngineError(
+                "context_full", f"This MLX chat needs {len(prompt):,} input tokens, exceeding "
+                f"its {limit:,}-token context budget. Start a new chat or shorten the input.",
+            )
+        kwargs["max_tokens"] = min(params.max_tokens, limit - len(prompt))
+    return prompt, kwargs
 
 
 class MLXBackend:
@@ -104,6 +178,11 @@ class MLXBackend:
         if not _is_apple_silicon():
             return False, _UNAVAILABLE
         if not _module_available("mlx_lm"):
+            if getattr(sys, "frozen", False):
+                return False, (
+                    "This desktop build does not include the MLX runtime. "
+                    "Use an Ollama model, or run Orchevian from source with the MLX extra."
+                )
             return False, _INSTALL
         return True, None
 
@@ -145,6 +224,12 @@ class MLXBackend:
             ) from exc
         try:
             weights, tokenizer = mlx_load(str(path))
+            # Model and tokenizer configs can specify different valid terminators.
+            # Preserve both instead of letting a model config replace the tokenizer's EOS.
+            eos = getattr(tokenizer, "eos_token_id", None)
+            eos_ids = getattr(tokenizer, "eos_token_ids", None)
+            if isinstance(eos, int) and isinstance(eos_ids, set):
+                eos_ids.add(eos)
         except EngineError:
             raise
         except Exception as exc:
@@ -177,6 +262,9 @@ class MLXBackend:
         params: GenerationParams,
         cancel: CancelToken,
     ) -> Iterator[str]:
+        if any(turn.images for turn in messages):
+            raise EngineError("vision_required", "This backend currently supports text only. "
+                              "Use an Ollama vision model for image interpretation.")
         weights, tokenizer = _handle_runtime(handle)
         if cancel.is_set():
             return
@@ -184,8 +272,7 @@ class MLXBackend:
             from mlx_lm import stream_generate as mlx_stream
         except ImportError as exc:
             raise EngineError("backend_unavailable", _UNAVAILABLE) from exc
-        prompt = _chat_prompt(tokenizer, messages)
-        kwargs: dict[str, object] = {"max_tokens": params.max_tokens}
+        prompt, kwargs = _generation_input(handle, tokenizer, messages, params)
         try:
             from mlx_lm.sample_utils import make_sampler
 
@@ -194,12 +281,9 @@ class MLXBackend:
             kwargs["temp"] = params.temperature
             kwargs["top_p"] = params.top_p
         try:
-            for response in mlx_stream(weights, tokenizer, prompt, **kwargs):
-                if cancel.is_set():
-                    return
-                text = _delta_text(response)
-                if text:
-                    yield text
+            yield from _clean_stream(
+                mlx_stream(weights, tokenizer, prompt, **kwargs), tokenizer, cancel,
+            )
         except EngineError:
             raise
         except Exception as exc:

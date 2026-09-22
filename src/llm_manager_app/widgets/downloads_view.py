@@ -37,6 +37,7 @@ class DownloadJob:
     token: str = field(repr=False, default="")
     state: str = "Queued"
     done: int = 0
+    total: int = 0
     message: str = "Waiting for a download slot"
     ref: ModelRef | None = None
     cancel: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -125,8 +126,10 @@ class DownloadManager(QObject):
     def _progress(self, job_id: int, done: int, total: int, name: str) -> None:
         job = self.jobs[job_id]
         job.done = done
+        job.total = total
         if job.state == "Downloading":
-            job.message = f"{done / GIB:.2f} of {total / GIB:.2f} GB"
+            job.message = (f"{done / GIB:.2f} of {total / GIB:.2f} GB"
+                           if total else name)
         self.changed.emit()
 
     def _finished(self) -> None:
@@ -137,7 +140,7 @@ class DownloadManager(QObject):
         self._threads.pop(job.id, None)
         if thread.ref is not None:
             job.ref, job.state, job.message = thread.ref, "Complete", "Ready in Installed"
-            job.done = job.choice.size_bytes
+            job.done = job.total or job.choice.size_bytes
             job.token = ""
             if not self._closing:
                 self.installed.emit(thread.ref)
@@ -156,7 +159,10 @@ class DownloadManager(QObject):
         if job.state == "Queued":
             job.state, job.message = "Cancelled", "Download cancelled"
         else:
-            job.state, job.message = "Cancelling", "Removing partial files…"
+            job.state, job.message = "Cancelling", (
+                "Stopping Ollama download…" if job.plan.model.format == "ollama"
+                else "Removing partial files…"
+            )
         self.changed.emit()
 
     def retry(self, job_id: int) -> None:
@@ -165,6 +171,7 @@ class DownloadManager(QObject):
             return
         job.cancel = threading.Event()
         job.done = 0
+        job.total = 0
         job.state, job.message = "Queued", "Waiting for a download slot"
         self._start_pending()
         self.changed.emit()
@@ -284,8 +291,10 @@ class DownloadsView(QWidget):
                 card_layout.addLayout(row)
                 details = QLabel(
                     f"{job.plan.model.repo_id}\n{job.choice.name}\n"
-                    f"{job.choice.size_bytes / GIB:.2f} GB · {len(job.choice.files)} "
-                    f"file{'s' if len(job.choice.files) != 1 else ''}", card
+                    + ("Managed by Ollama · size reported during download"
+                       if job.plan.model.format == "ollama" else
+                       f"{job.choice.size_bytes / GIB:.2f} GB · {len(job.choice.files)} "
+                       f"file{'s' if len(job.choice.files) != 1 else ''}"), card
                 )
                 details.setObjectName("downloadDetails")
                 details.setTextFormat(Qt.TextFormat.PlainText)
@@ -306,9 +315,11 @@ class DownloadsView(QWidget):
             self._details[job.id].setToolTip(job.message)
             if job.state == "Failed":
                 status.setText(f"Failed · {job.message}")
-            progress.setRange(0, 0 if job.state == "Cancelling" else 1000)
-            if job.state != "Cancelling":
-                progress.setValue(min(1000, int(1000 * job.done / max(1, job.choice.size_bytes))))
+            total = job.total or job.choice.size_bytes
+            indeterminate = job.state == "Cancelling" or not total
+            progress.setRange(0, 0 if indeterminate else 1000)
+            if not indeterminate:
+                progress.setValue(min(1000, int(1000 * job.done / total)))
             progress.setVisible(job.state in {"Downloading", "Cancelling"})
             progress.setAccessibleDescription(status.text())
             action.setText("Open model" if job.state == "Complete" else

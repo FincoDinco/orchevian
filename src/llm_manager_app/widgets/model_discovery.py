@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from llm_engine.services.discovery import GIB, Hardware, RemoteModel
+from llm_engine.services.discovery import GIB, Hardware, RemoteModel, quantization_bits
 from llm_engine.services.downloads import DownloadPlan
 from llm_manager_app.model_names import friendly_name
 from llm_manager_app.tokens import current_palette, qcolor
@@ -80,6 +80,7 @@ class ModelDiscovery(QWidget):
         self._transfer_state = ""
         self._plan: DownloadPlan | None = None
         self._hardware: Hardware | None = None
+        self._jobs = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
@@ -96,6 +97,31 @@ class ModelDiscovery(QWidget):
         controls.addWidget(self.search)
         layout.addLayout(controls)
 
+        formats = QHBoxLayout()
+        self.format = QComboBox(self)
+        self.format.setAccessibleName("Model format")
+        self.format.addItem("Automatic", "auto")
+        self.format.addItem("MLX (Apple Silicon)", "mlx")
+        self.format.addItem("GGUF", "gguf")
+        self.format.addItem("Ollama", "ollama")
+        formats.addWidget(QLabel("Format", self))
+        formats.addWidget(self.format, 1)
+        self.precision = QComboBox(self)
+        self.precision.setAccessibleName("Quantization bit depth")
+        self.precision.addItem("All bit depths", None)
+        for bits in (2, 3, 4, 5, 6, 8, 16, 32):
+            self.precision.addItem(f"{bits}-bit", bits)
+        formats.addWidget(QLabel("Quantization", self))
+        formats.addWidget(self.precision, 1)
+        layout.addLayout(formats)
+        self.format_hint = QLabel(
+            "Lower bit depths usually use less memory. Download size is shown before installing.",
+            self,
+        )
+        self.format_hint.setObjectName("pageSubtitle")
+        self.format_hint.setWordWrap(True)
+        layout.addWidget(self.format_hint)
+
         filters = QHBoxLayout()
         self.recommended = QCheckBox("Suggested for my computer", self)
         self.recommended.setChecked(True)
@@ -103,8 +129,12 @@ class ModelDiscovery(QWidget):
         self.recommended.toggled.connect(self._search)
         self.options = QPushButton("Options…", self)
         self.options.clicked.connect(self._show_options)
+        self.ollama_library = QPushButton("Browse Ollama tags", self)
+        self.ollama_library.clicked.connect(self._browse_ollama)
+        self.ollama_library.hide()
         filters.addWidget(self.recommended)
         filters.addStretch(1)
+        filters.addWidget(self.ollama_library)
         filters.addWidget(self.options)
         layout.addLayout(filters)
 
@@ -136,7 +166,7 @@ class ModelDiscovery(QWidget):
         footer.addWidget(self.selection_title)
         footer.addWidget(self.selection_hint)
         self.choices = QComboBox(self)
-        self.choices.setAccessibleName("Download version")
+        self.choices.setAccessibleName("Quantization and download size")
         self.choices.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
@@ -147,18 +177,13 @@ class ModelDiscovery(QWidget):
         actions = QHBoxLayout()
         self.model_details = QPushButton("Model details", self)
         self.model_details.clicked.connect(lambda: self._details_dialog.exec())
-        self.change_version = QPushButton("Change version", self)
-        self.change_version.setCheckable(True)
-        self.change_version.toggled.connect(self.choices.setVisible)
-        self.change_version.hide()
-        self.files = QPushButton("Get model", self)
+        self.files = QPushButton("Choose download", self)
         self.files.setObjectName("primaryButton")
         self.files.clicked.connect(self._request_files)
         self.download = QPushButton("Download", self)
         self.download.setObjectName("primaryButton")
         self.download.clicked.connect(self._request_download)
         actions.addWidget(self.model_details)
-        actions.addWidget(self.change_version)
         actions.addStretch(1)
         actions.addWidget(self.files)
         actions.addWidget(self.download)
@@ -173,17 +198,12 @@ class ModelDiscovery(QWidget):
         hint.setWordWrap(True)
         settings.addWidget(hint)
         form = QFormLayout()
-        self.format = QComboBox(self._options_dialog)
-        self.format.addItem("Automatic (recommended)", "auto")
-        self.format.addItem("GGUF", "gguf")
-        self.format.addItem("MLX (Apple Silicon)", "mlx")
         self.budget = QDoubleSpinBox(self._options_dialog)
         self.budget.setRange(0, 65536)
         self.budget.setDecimals(1)
         self.budget.setSpecialValueText("Automatic")
         self.budget.setSuffix(" GB")
         self.budget.setToolTip("Optional limit on the system memory used for recommendations.")
-        form.addRow("Model format", self.format)
         form.addRow("Memory limit", self.budget)
         settings.addLayout(form)
         self.token = QLineEdit(self._options_dialog)
@@ -220,7 +240,44 @@ class ModelDiscovery(QWidget):
         close_details = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close_details.rejected.connect(self._details_dialog.accept)
         detail_layout.addWidget(close_details)
+        self.format.currentIndexChanged.connect(self._format_changed)
+        self.precision.currentIndexChanged.connect(self._precision_changed)
         self._selection_changed()
+
+    def _format_changed(self):
+        ollama = self.format.currentData() == "ollama"
+        self.results.clear()
+        self.precision.setEnabled(not ollama)
+        self.recommended.setEnabled(not ollama)
+        self.options.setEnabled(not ollama)
+        self.recommended.setVisible(not ollama)
+        self.options.setVisible(not ollama)
+        self.ollama_library.setVisible(ollama)
+        self.search.setText("Choose tag" if ollama else "Search")
+        self.query.setPlaceholderText(
+            "Ollama model:tag, e.g. qwen3:4b" if ollama else "Search models by name"
+        )
+        self.format_hint.setText(
+            "Enter a model:tag from the Ollama library. Tags select model size and quantization "
+            "(such as q4_K_M or q8_0). Ollama must be running."
+            if ollama else "Lower bit depths usually use less memory. "
+            "MLX precision is chosen by repository; GGUF precision is chosen by file."
+        )
+        if ollama:
+            self.message.setText("Enter an Ollama model:tag, then choose Download.")
+        else:
+            self._search()
+
+    def _browse_ollama(self):
+        item = self.results.currentItem()
+        url = item.data(Qt.ItemDataRole.UserRole).url if item else "https://ollama.com/library"
+        QDesktopServices.openUrl(QUrl(url))
+
+    def _precision_changed(self):
+        if self._plan is not None and self._plan.model.format == "gguf":
+            self.apply_plan(self._plan)
+        else:
+            self._search()
 
     def _show_options(self) -> None:
         previous = (self.format.currentData(), self.budget.value())
@@ -242,11 +299,14 @@ class ModelDiscovery(QWidget):
         self._busy = busy
         for widget in (
             self.query, self.format, self.search, self.recommended, self.budget,
-            self.results, self.token, self.choices, self.options, self.change_version,
+            self.results, self.token, self.choices, self.options, self.precision,
         ):
             widget.setEnabled(not busy)
         self.files.setEnabled(not busy and self.results.currentItem() is not None)
-        self.download.setEnabled(not busy and self._plan is not None)
+        ollama = self.format.currentData() == "ollama"
+        for widget in (self.precision, self.recommended, self.options):
+            widget.setEnabled(not busy and not ollama)
+        self.download.setEnabled(not busy and self.choices.currentData() is not None)
         self.files.setVisible(self._plan is None)
         self.download.setVisible(self._plan is not None)
 
@@ -257,24 +317,52 @@ class ModelDiscovery(QWidget):
 
     def apply_plan(self, plan: DownloadPlan) -> None:
         self._plan = plan
+        previous = self.choices.currentData()
+        self.choices.blockSignals(True)
         self.choices.clear()
         for choice in plan.choices:
-            self.choices.addItem(f"{choice.name} · {choice.size_bytes / GIB:.2f} GB", choice)
+            bits = quantization_bits(
+                plan.model.repo_id if plan.model.format == "mlx" else choice.name
+            )
+            if (plan.model.format == "gguf" and self.precision.currentData() is not None
+                    and bits != self.precision.currentData()):
+                continue
+            precision = f"{bits}-bit · " if bits else ""
+            size = ("Size reported during download" if plan.model.format == "ollama"
+                    else f"{choice.size_bytes / GIB:.2f} GB")
+            self.choices.addItem(f"{precision}{choice.name} · {size}", choice)
             self.choices.setItemData(
                 self.choices.count() - 1, self.choices.itemText(self.choices.count() - 1),
                 Qt.ItemDataRole.ToolTipRole,
             )
-        self.change_version.setVisible(len(plan.choices) > 1)
-        self.message.setText("Ready to download. Your model will appear in Downloaded.")
+        if previous is not None:
+            index = self.choices.findData(previous)
+            if index >= 0:
+                self.choices.setCurrentIndex(index)
+        self.choices.blockSignals(False)
+        self.choices.show()
+        self.message.setText(
+            "Ready to download. Your model will appear in Downloaded."
+            if self.choices.count() else "No files at this bit depth. Choose another quantization."
+        )
+        if not self.choices.count():
+            self.selection_hint.setText("This repository does not offer that bit depth.")
         self._update_choice()
         self.set_busy(self._busy)
 
     def _update_choice(self, *_args: object) -> None:
+        self._transfer_state = ""
         choice = self.choices.currentData()
         if choice is None:
             return
-        self.download.setText(f"Download · {choice.size_bytes / GIB:.2f} GB")
-        self.selection_hint.setText("Saves to your computer. You can cancel at any time.")
+        self.download.setText("Download with Ollama" if self._plan.model.format == "ollama"
+                              else f"Download · {choice.size_bytes / GIB:.2f} GB")
+        self.selection_hint.setText(
+            "Stored and managed by Ollama. Cancelled downloads can be resumed."
+            if self._plan.model.format == "ollama"
+            else "Saves to your computer. You can cancel at any time."
+        )
+        self._match_download()
 
     def _request_download(self) -> None:
         if self._transfer_state in {"Queued", "Downloading", "Cancelling", "Complete"}:
@@ -285,12 +373,16 @@ class ModelDiscovery(QWidget):
             self.download_requested.emit(self._plan, choice, self.token.text())
 
     def update_downloads(self, jobs) -> None:
+        self._jobs = list(jobs)
+        self._update_choice()
+
+    def _match_download(self) -> None:
         self._transfer_state = ""
         if self._plan is None or self.choices.currentData() is None:
             return
         choice = self.choices.currentData()
         key = (self._plan.model.repo_id, self._plan.model.format, choice.name)
-        for job in jobs:
+        for job in self._jobs:
             if job.key == key:
                 self._transfer_state = job.state
                 break
@@ -300,8 +392,6 @@ class ModelDiscovery(QWidget):
                 "Ready in Downloads." if self._transfer_state == "Complete"
                 else "Downloading in the background. Keep browsing for another model."
             )
-        else:
-            self._update_choice()
 
     def apply_results(
         self, models: list[RemoteModel], hardware: Hardware, recommended: bool,
@@ -309,6 +399,10 @@ class ModelDiscovery(QWidget):
         self._hardware = hardware
         self.hardware.setText(hardware.summary)
         self.results.clear()
+        bits = self.precision.currentData()
+        if bits is not None:
+            models = [model for model in models if model.format != "mlx"
+                      or quantization_bits(model.repo_id) == bits]
         if models:
             message = (
                 "Suggested for your computer · Memory needs are estimates."
@@ -334,7 +428,9 @@ class ModelDiscovery(QWidget):
             )
             item = QListWidgetItem(_display_name(model))
             item.setData(Qt.ItemDataRole.UserRole, model)
-            item.setData(_META_ROLE, f"{size} · {fit_label}")
+            bits = quantization_bits(model.repo_id)
+            precision = f" · {bits}-bit" if bits is not None else ""
+            item.setData(_META_ROLE, f"{model.format.upper()}{precision} · {size} · {fit_label}")
             item.setToolTip(model.repo_id + "\n" + model.execution_hint(hardware))
             item.setData(Qt.ItemDataRole.AccessibleTextRole, f"{item.text()}. {size}. {fit_label}.")
             self.results.addItem(item)
@@ -345,12 +441,13 @@ class ModelDiscovery(QWidget):
         self._plan = None
         self._transfer_state = ""
         self.choices.clear()
-        self.change_version.setChecked(False)
-        self.change_version.hide()
+        self.choices.hide()
         item = self.results.currentItem()
         model = item.data(Qt.ItemDataRole.UserRole) if item else None
         self.selection.setVisible(model is not None)
         self.open.setEnabled(model is not None)
+        self.open.setText("View Ollama tags" if model and model.format == "ollama"
+                          else "View on Hugging Face")
         self.selection_title.setText(_display_name(model) if model else "")
         self.selection_hint.setText(
             "Requires access on Hugging Face. Open Model details to learn more."
@@ -364,6 +461,12 @@ class ModelDiscovery(QWidget):
                 if model.gated else ""
             ) if model else ""
         )
+        if model and model.format == "ollama":
+            self.details.setText(
+                f"{model.repo_id}\n\nOllama manages this download and its storage. "
+                "Choose a tag from the library for the model size and quantization you want. "
+                "Download size is reported once the pull begins."
+            )
         self.set_busy(self._busy)
 
     def open_selected(self, *_args: object) -> None:

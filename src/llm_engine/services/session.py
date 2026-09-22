@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from llm_engine.backends.protocol import InferenceBackend, LoadedHandle
 from llm_engine.backends.registry import BackendRegistry
 from llm_engine.domain.errors import EngineError
+from llm_engine.domain.images import validate_image_inputs
 from llm_engine.domain.models import (
     CancelToken,
     ChatTurn,
@@ -219,6 +220,7 @@ class ModelSession:
         params: GenerationParams,
         cancel: CancelToken,
     ) -> Iterator[str]:
+        validate_image_inputs(messages)
         if not self._lock.acquire(blocking=False):
             raise EngineError("generating", "generation already in progress")
         try:
@@ -229,6 +231,15 @@ class ModelSession:
                 epoch = self._epoch
                 handle = self._handle
                 backend = self._backend
+                if (
+                    any(turn.images for turn in messages)
+                    and handle.model.supports_images is not True
+                ):
+                    raise EngineError(
+                        "vision_required",
+                        "This model cannot read images here. "
+                        "Select an Ollama vision model or use extracted text only.",
+                    )
         except BaseException:
             self._generating = False
             self._lock.release()

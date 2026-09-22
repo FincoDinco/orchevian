@@ -11,6 +11,7 @@ from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import GenerationParams, ModelRef
 from llm_engine.services.chat import ChatService
 from llm_engine.services.session import ModelSession
+from llm_engine.services.storage import summary as storage_summary
 from llm_engine.store.vault import MemoryVault
 
 _BALANCED = GenerationParams.preset("balanced")
@@ -37,6 +38,8 @@ class ChatWorker(QObject):
     catalog_failed = Signal(str, str)
     memories_created = Signal(object)
     memories_failed = Signal(str, str)
+    artifact_progress = Signal(int, str)
+    web_progress = Signal(int, str)
 
     def __init__(self, chat: ChatService, session: ModelSession | None = None) -> None:
         super().__init__()
@@ -46,29 +49,39 @@ class ChatWorker(QObject):
         chat.on_done = self._on_done
         chat.on_error = self._on_error
         chat.on_load_progress = self._on_load_progress
+        chat.on_artifact_progress = self.artifact_progress.emit
+        chat.on_web_progress = self.web_progress.emit
 
-    @Slot(int, str, object, object)
+    @Slot(int, str, object, object, object, bool)
     def send(
-        self, conversation_id: int, content: str, params: object = None, cancel: object = None
+        self, conversation_id: int, content: str, params: object = None, cancel: object = None,
+        artifact_request: object = None,
+        web_search: bool = False,
     ) -> None:
         try:
             self._chat.send(
                 conversation_id, content, _params(params),
                 cancel=cancel if isinstance(cancel, threading.Event) else None,
+                artifact_request=artifact_request,
+                web_search=web_search,
             )
         except EngineError as exc:
             self.rejected.emit(conversation_id, exc.code, str(exc))
             return
         self.accepted.emit(conversation_id, "send")
 
-    @Slot(int, object, object)
+    @Slot(int, object, object, object, bool)
     def regenerate(
-        self, conversation_id: int, params: object = None, cancel: object = None
+        self, conversation_id: int, params: object = None, cancel: object = None,
+        artifact_request: object = None,
+        web_search: bool = False,
     ) -> None:
         try:
             self._chat.regenerate(
                 conversation_id, _params(params),
                 cancel=cancel if isinstance(cancel, threading.Event) else None,
+                artifact_request=artifact_request,
+                web_search=web_search,
             )
         except EngineError as exc:
             self.rejected.emit(conversation_id, exc.code, str(exc))
@@ -239,6 +252,7 @@ class CatalogWorker(QObject):
     """Lives on a QThread. ``registry.list_models`` must not run on the GUI thread."""
 
     listed = Signal(object, object)
+    storage_updated = Signal(object)
     failed = Signal(str, str)
 
     def __init__(self, registry: BackendRegistry) -> None:
@@ -256,6 +270,11 @@ class CatalogWorker(QObject):
             self.failed.emit("backend_unavailable", str(exc))
             return
         self.listed.emit(list(models), dict(availability))
+        try:
+            storage = storage_summary(models, availability)
+        except Exception as exc:
+            storage = str(exc)
+        self.storage_updated.emit(storage)
 
 
 def start_catalog_worker(

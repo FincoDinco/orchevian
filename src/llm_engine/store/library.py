@@ -12,6 +12,7 @@ from llm_engine.domain.models import (
     ConversationSummary,
     ModelRef,
     Project,
+    PromptTemplate,
 )
 from llm_engine.store.sqlite import SqliteStore
 
@@ -118,6 +119,7 @@ class LibraryService:
         self,
         project_id: int | None = None,
         model: ModelRef | None = None,
+        template_id: int | None = None,
     ) -> Conversation:
         now = _now()
         system_prompt = ""
@@ -128,6 +130,11 @@ class LibraryService:
             system_prompt = project.instructions
             project_model = project.default_model
         model = resolve_new_chat_model(model, project_model, self.default_model)
+        if template_id is not None:
+            template = self.get_template(template_id)
+            system_prompt = "\n\n".join(
+                part for part in (system_prompt, template.system_prompt) if part.strip()
+            )
         model_name, backend = _model_columns(model)
         with self._store.transaction() as conn:
             cur = conn.execute(
@@ -142,6 +149,56 @@ class LibraryService:
 
     def rename(self, id: int, title: str) -> None:
         self._update_conversation(id, title=title)
+
+    def list_templates(self) -> list[PromptTemplate]:
+        with self._store.locked() as conn:
+            rows = conn.execute(
+                "SELECT * FROM templates ORDER BY name COLLATE NOCASE, id"
+            ).fetchall()
+        return [self._template_from_row(row) for row in rows]
+
+    def get_template(self, id: int) -> PromptTemplate:
+        with self._store.locked() as conn:
+            row = conn.execute("SELECT * FROM templates WHERE id = ?", (id,)).fetchone()
+        if row is None:
+            raise EngineError("not_found", f"template {id} not found")
+        return self._template_from_row(row)
+
+    def save_template(
+        self, *, name: str, description: str = "", system_prompt: str = "",
+        user_prompt: str = "", id: int | None = None,
+    ) -> PromptTemplate:
+        if not name.strip():
+            raise EngineError("config_invalid", "Give the template a name.")
+        values = (name.strip(), description, system_prompt, user_prompt)
+        with self._store.transaction() as conn:
+            if id is None:
+                cursor = conn.execute(
+                    "INSERT INTO templates (name, description, system_prompt, user_prompt, "
+                    "created_at) VALUES (?, ?, ?, ?, ?)", (*values, _now()),
+                )
+                id = int(cursor.lastrowid)
+            else:
+                cursor = conn.execute(
+                    "UPDATE templates SET name = ?, description = ?, system_prompt = ?, "
+                    "user_prompt = ? WHERE id = ?", (*values, id),
+                )
+                if cursor.rowcount == 0:
+                    raise EngineError("not_found", f"template {id} not found")
+        return self.get_template(id)
+
+    def delete_template(self, id: int) -> None:
+        with self._store.transaction() as conn:
+            cursor = conn.execute("DELETE FROM templates WHERE id = ?", (id,))
+            if cursor.rowcount == 0:
+                raise EngineError("not_found", f"template {id} not found")
+
+    def _template_from_row(self, row: Any) -> PromptTemplate:
+        return PromptTemplate(
+            int(row["id"]), row["name"], row["description"] or "",
+            row["system_prompt"] or "", row["user_prompt"] or "",
+            _require_dt(row["created_at"]),
+        )
 
     def delete_conversation(self, id: int) -> None:
         with self._store.transaction() as conn:

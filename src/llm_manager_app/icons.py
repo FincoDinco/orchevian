@@ -23,7 +23,11 @@ class _LineIcon(QIconEngine):
         painter.translate(rect.x(), rect.y())
         painter.scale(rect.width() / 24, rect.height() / 24)
         palette = current_palette()
-        color = palette.secondary if mode == QIcon.Mode.Disabled else palette.text
+        color = palette.secondary if mode == QIcon.Mode.Disabled else (
+            palette.danger if self.name == "stop" else
+            "#FFFFFF" if self.name == "stop-generation" else
+            palette.canvas if self.name == "send" else palette.text
+        )
         painter.setPen(
             QPen(
                 qcolor(color),
@@ -42,6 +46,13 @@ class _LineIcon(QIconEngine):
         elif self.name == "sidebar":
             painter.drawRoundedRect(QRectF(3, 4, 18, 16), 2, 2)
             painter.drawLine(9, 4, 9, 20)
+        elif self.name in {"stop", "stop-generation"}:
+            painter.setBrush(qcolor(color))
+            painter.drawRoundedRect(QRectF(6, 6, 12, 12), 2, 2)
+        elif self.name == "send":
+            painter.drawLine(12, 19, 12, 5)
+            painter.drawLine(6, 11, 12, 5)
+            painter.drawLine(12, 5, 18, 11)
         elif self.name == "close":
             painter.drawLine(7, 7, 17, 17)
             painter.drawLine(17, 7, 7, 17)

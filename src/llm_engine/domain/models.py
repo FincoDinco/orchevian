@@ -33,6 +33,7 @@ class LocalModel:
     details: dict[str, str] = field(default_factory=dict)
     available: bool = True
     unavailable_reason: str | None = None
+    supports_images: bool | None = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +66,7 @@ class ChatTurn:
     tokens_per_sec: float | None = None  # stores chunks/s
     elapsed_s: float | None = None
     created_at: datetime | None = None
+    images: tuple[bytes, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +93,16 @@ class Project:
     name: str
     instructions: str
     default_model: ModelRef | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PromptTemplate:
+    id: int
+    name: str
+    description: str
+    system_prompt: str
+    user_prompt: str
     created_at: datetime
 
 

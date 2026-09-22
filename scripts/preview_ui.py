@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -18,7 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QTabWidget  # noqa: E402
 
 from llm_engine.backends.fake import FakeBackend  # noqa: E402
 from llm_engine.backends.registry import BackendRegistry  # noqa: E402
@@ -31,7 +32,7 @@ from llm_engine.store.sqlite import SqliteStore  # noqa: E402
 from llm_manager_app.main_window import MainWindow  # noqa: E402
 from llm_manager_app.widgets.downloads_view import DownloadJob  # noqa: E402
 from llm_manager_app.widgets.settings import KEY_APPEARANCE, SettingsDialog  # noqa: E402
-from llm_manager_app.widgets.sidebar import CHATS, MEMORY, MODELS, PRIVATE  # noqa: E402
+from llm_manager_app.widgets.sidebar import CHATS, MEMORY, MODELS, PRIVATE, TEMPLATES  # noqa: E402
 
 
 def main() -> None:
@@ -44,6 +45,14 @@ def main() -> None:
         root = Path(temporary)
         store = SqliteStore(root / "demo.db")
         library = LibraryService(store)
+        library.save_template(
+            name="Review a draft", description="Clear, useful feedback on a piece of writing",
+            system_prompt="Help me make my writing clearer. Preserve my voice, explain the "
+                          "most useful changes, and flag claims that need evidence.",
+            user_prompt="Review this draft for clarity, structure, and tone:\n\n[Paste your draft]",
+        )
+        library.save_template(name="Explore an idea", description="Questions that develop an idea",
+                              system_prompt="Ask focused questions and challenge weak assumptions.")
         models = [
             LocalModel(ModelRef(BackendName.OLLAMA, name), None, size)
             for name, size in (
@@ -68,11 +77,26 @@ def main() -> None:
 
         try:
             capture("welcome-dark")
+            window._sidebar.select_section(TEMPLATES)
+            window._templates._list.setCurrentRow(1)
+            capture("templates-dark")
+            window.resize(1024, 680)
+            window._on_appearance("light")
+            capture("templates-light-compact")
+            window._on_appearance("dark")
+            window.resize(1280, 800)
             window._open_settings()
             capture("settings-workspace-dark")
+            settings_tabs = window._settings_dialog.findChild(QTabWidget, "settingsTabs")
+            settings_tabs.setCurrentIndex(2)
+            capture("settings-api-dark")
+            settings_tabs.setCurrentIndex(0)
             window.resize(1024, 680)
             window._settings_dialog._appearance.setCurrentIndex(1)
             capture("settings-workspace-light-compact")
+            settings_tabs.setCurrentIndex(2)
+            capture("settings-api-light-compact")
+            settings_tabs.setCurrentIndex(0)
             window._sidebar.select_section(PRIVATE)
             window._on_model_selected(models[0].ref)
             private_id = window._private_id
@@ -106,7 +130,35 @@ def main() -> None:
                 library.rename(chat.summary.id, title)
             window._sidebar.select_project(writing.id)
             window._on_catalog_listed(models, {"ollama": (True, None)})
+            capture("project-home-empty-dark")
+            shared = window._chat_service.documents
+            (root / "Writing brief.md").write_text(
+                "# Essay brief\n\nWrite a practical introduction to local AI. "
+                "First draft due Friday.\n", encoding="utf-8",
+            )
+            (root / "Editorial calendar.csv").write_text(
+                "Stage,Due\nOutline,Wednesday\nFirst draft,Friday\n", encoding="utf-8",
+            )
+            for name in ("Writing brief.md", "Editorial calendar.csv"):
+                shared.import_project_file(writing.id, root / name, threading.Event())
+            window._project_home.files.refresh()
             capture("project-home-dark")
+            source_cid = chat.summary.id
+            store.add_message(source_cid, "user", "When are the outline and first draft due?")
+            shared.context(source_cid, "outline first draft due")
+            store.add_message(source_cid, "assistant", "The outline is due Wednesday, "
+                              "and the first draft is due Friday.")
+            window._list.refresh(select_id=source_cid)
+            window._open_project_chat(source_cid)
+            capture("project-chat-files-dark")
+            attachment_panel = window._chat_view.attachments
+            attachment_panel.choose_project_files()
+            capture("project-file-selection-dark", attachment_panel._file_selector)
+            attachment_panel._file_selector.close()
+            attachment_panel.show_sources()
+            capture("project-source-history-dark", attachment_panel._dialogs[-1])
+            attachment_panel._dialogs[-1].close()
+            window._sidebar.select_project(writing.id)
             window._on_appearance("light")
             window.resize(1024, 680)
             capture("project-home-light-compact")
@@ -154,6 +206,52 @@ def main() -> None:
             )
             window._chat_view.set_conversation(conversation)
             capture("chat-dark")
+            # Exercise actual source rendering with a clearly labelled offline fixture.
+            web = window._chat_service.web
+            original_retriever = web.retriever
+            web.retriever = lambda *args: {
+                "provider": "Preview fixture", "warning": "", "sources": [{
+                    "title": "Python documentation", "url": "https://docs.python.org/3/",
+                    "excerpt": "The Python documentation includes a tutorial, library "
+                               "reference, and language reference.",
+                }],
+            }
+            message_id = store.add_message(cid, "user", "Find the Python documentation")
+            try:
+                web.context(cid, "Find the Python documentation", True,
+                            threading.Event(), lambda _: None)
+                window._chat_view.composer().web_search.setChecked(True)
+                window._chat_view.web_sources.refresh()
+                window._chat_view.web_sources.disclosure.setChecked(True)
+                capture("web-sources-dark")
+                window.resize(1024, 680)
+                window._on_appearance("light")
+                capture("web-sources-light-compact")
+            finally:
+                web.retriever = original_retriever
+                with store.transaction() as conn:
+                    conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+                window._chat_view.composer().web_search.setChecked(False)
+                window._chat_view.web_sources.refresh()
+                window._on_appearance("dark")
+                window.resize(1280, 800)
+            brief = root / "Launch brief.md"
+            brief.write_text("# Launch plan\n\nThe launch budget is $450.\n", encoding="utf-8")
+            panel = window._chat_view.attachments
+            document = panel.service.import_file(cid, brief, threading.Event())
+            panel.disclosure.setChecked(True)
+            panel.refresh()
+            capture("chat-attachments-dark")
+            window.resize(1024, 680)
+            window._on_appearance("light")
+            capture("chat-attachments-light-compact")
+            panel.preview()
+            capture("attachment-reader-light", panel._dialogs[-1])
+            panel._dialogs[-1].close()
+            panel.service.remove_draft(cid, document.id)
+            panel.refresh()
+            window._on_appearance("dark")
+            window.resize(1280, 800)
             window._chat_view.set_inspector_open(True)
             capture("chat-settings-dark")
             window._chat_view.set_inspector_open(False)
@@ -165,7 +263,15 @@ def main() -> None:
                 "<think>I’ll consider the layout, interaction, and reading experience.\n"
                 "Keep frequent actions easy to find and let optional details stay out of the way."
             )
+            window._model_status_timer.stop()
+            window._model_activity_action.setVisible(True)
+            window._model_activity.set_activity(True, "Model is thinking…")
             capture("chat-thinking-collapsed-dark")
+            window._on_appearance("light")
+            window.resize(1024, 680)
+            capture("model-activity-light-compact")
+            window._on_appearance("dark")
+            window.resize(1280, 800)
             transcript._thought_toggle.click()
             capture("chat-thinking-expanded-dark")
             transcript.append_stream(
@@ -173,11 +279,16 @@ def main() -> None:
             )
             transcript.finish_stream(parse_markdown=True)
             window._chat_view.composer().set_generating(False)
+            window._sync_model_activity()
+            window._model_status_timer.start()
             capture("chat-thinking-complete-dark")
             window._chat_view.set_conversation(conversation)
             window._sidebar.select_section(MODELS)
             QTest.qWait(300)
             capture("models-dark")
+            window._models.storage._toggle.setChecked(True)
+            capture("model-storage-dark")
+            window._models.storage._toggle.setChecked(False)
             window._models.rename_selected("My writing helper")
             capture("model-custom-name-dark")
             window._models.rename_selected("")
@@ -252,6 +363,9 @@ def main() -> None:
             window.resize(1280, 840)
             window._models._tabs.setCurrentIndex(0)
             capture("models-light")
+            window._models.storage._toggle.setChecked(True)
+            capture("model-storage-light")
+            window._models.storage._toggle.setChecked(False)
             window._sidebar.select_section(CHATS)
             window._chat_view.set_conversation(conversation)
             capture("chat-light")

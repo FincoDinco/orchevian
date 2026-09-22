@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from llm_engine.domain.models import ModelRef
 from llm_engine.store.library import resolve_new_chat_model
 from llm_manager_app.model_names import BACKEND_TITLES
+from llm_manager_app.widgets.attachments import AttachmentPanel
 from llm_manager_app.widgets.composer import Composer
 from llm_manager_app.widgets.model_picker import ModelPicker
 from llm_manager_app.widgets.project_sheet import ProjectSheet
@@ -27,7 +28,7 @@ class ProjectHome(QScrollArea):
     browse_requested = Signal()
     project_saved = Signal(int)
 
-    def __init__(self, parent=None, *, library, names):
+    def __init__(self, parent=None, *, library, names, documents=None):
         super().__init__(parent)
         self.setObjectName("projectHome")
         self.setWidgetResizable(True)
@@ -36,6 +37,8 @@ class ProjectHome(QScrollArea):
         self._names = names
         self.project = None
         self._drafts = {}
+        self._creation_drafts = {}
+        self._web_drafts = {}
         self._overrides = {}
         self._edit_drafts = {}
         self._models = []
@@ -66,6 +69,8 @@ class ProjectHome(QScrollArea):
         self.composer._send.setObjectName("projectSendButton")
         self.composer._edit.setPlaceholderText("Start a conversation in this project…")
         self.composer._edit.textChanged.connect(self._save_draft)
+        self.composer.create_files.toggled.connect(self._save_draft)
+        self.composer.web_search.toggled.connect(self._save_draft)
         self.composer.send_requested.connect(self._send)
         self._layout.addWidget(self.composer)
         self.status = QLabel(body)
@@ -73,6 +78,13 @@ class ProjectHome(QScrollArea):
         self.status.setWordWrap(True)
         self.status.setObjectName("settingsHint")
         self._layout.addWidget(self.status)
+        self.files = AttachmentPanel(body, project=True)
+        self.files.service = documents
+        self.files.disclosure.setChecked(True)
+        self.files.busy_changed.connect(self._sync)
+        self._layout.addWidget(self.files)
+        self.files.setVisible(documents is not None)
+        self.composer.files_dropped.connect(self.files.import_paths)
         heading = QLabel("Conversations", body)
         heading.setObjectName("sidebarSection")
         self._layout.addWidget(heading)
@@ -115,8 +127,14 @@ class ProjectHome(QScrollArea):
         if self.project is not None and self.project.id != project.id:
             self._remove_editor(keep=True)
         self.project = project
+        self.files.set_conversation(project.id)
+        self.files.setVisible(self.files.service is not None)
         self.title.setText(project.name)
+        creating = self._creation_drafts.get(project.id, False)
+        searching = self._web_drafts.get(project.id, False)
         self.composer.set_text(self._drafts.get(project.id, ""))
+        self.composer.create_files.setChecked(creating)
+        self.composer.web_search.setChecked(searching)
         self.refresh_chats()
         self.refresh_labels()
         if project.id in self._edit_drafts and self.editor is None:
@@ -125,6 +143,8 @@ class ProjectHome(QScrollArea):
     def _save_draft(self):
         if self.project is not None:
             self._drafts[self.project.id] = self.composer.text()
+            self._creation_drafts[self.project.id] = self.composer.create_files.isChecked()
+            self._web_drafts[self.project.id] = self.composer.web_search.isChecked()
 
     def effective_model(self):
         if self.project is None:
@@ -179,7 +199,9 @@ class ProjectHome(QScrollArea):
         )
         self.status.setText(message)
         self.status.setVisible(bool(message))
+        self.composer.set_importing(self.files.busy())
         self.composer.set_send_enabled(available and not self._busy)
+        self.files.set_generating(self._busy)
         self.picker.setEnabled(self._ready and not self._busy)
 
     def _choose(self, ref):
@@ -188,7 +210,7 @@ class ProjectHome(QScrollArea):
             self.refresh_labels()
 
     def _send(self, text):
-        if self.project is not None:
+        if self.project is not None and not self.files.busy() and not self._busy:
             self.start_requested.emit(self.project.id, text, self.effective_model())
 
     def sent(self):

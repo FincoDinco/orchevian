@@ -501,7 +501,10 @@ def test_shortcuts_sheet_lists_design_keys(tmp_path: Path) -> None:
         settings = window.findChild(QWidget, "settingsDialog")
         assert settings is not None
         tabs = settings.findChild(QTabWidget, "settingsTabs")
-        assert tabs is not None and tabs.count() == 3
+        assert tabs is not None
+        assert [tabs.tabText(i) for i in range(tabs.count())] == [
+            "General", "Models", "API", "Advanced",
+        ]
         actions = window.findChildren(QAction)
         prefs = QKeySequence(QKeySequence.StandardKey.Preferences)
         assert any(a.shortcut().matches(prefs) for a in actions)

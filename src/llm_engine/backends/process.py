@@ -34,7 +34,7 @@ def _serve(connection: Connection, factory: Callable[[], InferenceBackend]) -> N
             try:
                 if command == "load":
                     handle = backend.load(*args)
-                    connection.send(("loaded", None))
+                    connection.send(("loaded", handle.model))
                 elif command == "generate":
                     if handle is None:
                         raise EngineError("no_model", "No model loaded.")
@@ -71,12 +71,14 @@ class ProcessBackend:
         *,
         load_timeout: float = 120.0,
         first_token_timeout: float = 120.0,
+        token_timeout: float = 60.0,
     ) -> None:
         self.name = catalog.name
         self.catalog = catalog
         self._factory = factory
         self._load_timeout = load_timeout
         self._first_token_timeout = first_token_timeout
+        self._token_timeout = token_timeout
         self._process = None
         self._connection: Connection | None = None
         self._stop = threading.Event()
@@ -134,10 +136,10 @@ class ProcessBackend:
             process.start()
             child.close()
             connection.send(("load", (model, options)))
-            kind, _ = self._receive(cancel, time.monotonic() + self._load_timeout)
+            kind, loaded_model = self._receive(cancel, time.monotonic() + self._load_timeout)
             if kind != "loaded":
                 raise EngineError("load_failed", "Model worker returned an invalid response.")
-            return ModelHandle(model, options or LoadOptions(), runtime=process)
+            return ModelHandle(loaded_model, options or LoadOptions(), runtime=process)
         except BaseException as exc:
             child.close()
             self._dispose()
@@ -190,7 +192,7 @@ class ProcessBackend:
                     return
                 if kind != "token":
                     raise EngineError("load_failed", "Model worker returned an invalid response.")
-                deadline = None
+                deadline = time.monotonic() + self._token_timeout
                 yield payload
         except EngineError as exc:
             if exc.code != "cancelled":

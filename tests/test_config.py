@@ -164,11 +164,11 @@ def test_cli_help_exits_zero() -> None:
     assert exc.value.code == 0
 
 
-def test_unimplemented_commands_fail_without_writing(tmp_path: Path) -> None:
+def test_migrate_command_initializes_database_without_changing_config(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
     db_path = tmp_path / "data.db"
-    for command in ("chat", "serve", "migrate"):
-        assert main([command, "--config", str(cfg_path), "--db", str(db_path)]) == 1
+    assert main(["migrate", "--config", str(cfg_path), "--db", str(db_path)]) == 0
+    assert db_path.exists()
     assert not cfg_path.exists()
 
 

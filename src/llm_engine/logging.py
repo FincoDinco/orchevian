@@ -22,9 +22,11 @@ def setup_logging(*, verbose: bool = False, log_path: Path | None = None) -> log
     logger.propagate = False
     formatter = logging.Formatter(_FORMAT)
 
-    stderr = logging.StreamHandler(sys.stderr)
-    stderr.setFormatter(formatter)
-    logger.addHandler(stderr)
+    # Windows desktop bundles have no stderr; the rotating file remains available.
+    if sys.stderr is not None:
+        stderr = logging.StreamHandler(sys.stderr)
+        stderr.setFormatter(formatter)
+        logger.addHandler(stderr)
 
     path = log_path if log_path is not None else default_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import platform
 import re
 from collections import defaultdict
 from collections.abc import Iterable
@@ -12,7 +13,11 @@ from PySide6.QtCore import QObject, QSettings, Signal
 from llm_engine.domain.models import ModelRef
 
 BACKEND_TITLES = {"ollama": "Ollama", "mlx": "MLX", "gguf": "GGUF"}
-BACKEND_ORDER = ("ollama", "gguf", "mlx")
+BACKEND_ORDER = (
+    ("mlx", "gguf", "ollama")
+    if platform.system() == "Darwin" and platform.machine().lower() in {"arm64", "aarch64"}
+    else ("ollama", "gguf", "mlx")
+)
 
 
 def friendly_name(name: str) -> str:

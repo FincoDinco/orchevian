@@ -20,7 +20,10 @@ from llm_engine.domain.models import (
     ModelRef,
 )
 from llm_engine.logging import get_logger
+from llm_engine.services.artifacts import ArtifactService, creation_request
+from llm_engine.services.documents import DocumentService
 from llm_engine.services.session import ModelSession
+from llm_engine.services.web_search import WebSearchService
 from llm_engine.store.library import LibraryService
 from llm_engine.store.vault import MemoryVault
 
@@ -81,6 +84,11 @@ class ChatService:
         self._cancel = threading.Event()
         self._worker_thread: threading.Thread | None = None
         self.memory_vault = memory_vault
+        self.documents = DocumentService(self._store)
+        self.artifacts = ArtifactService(self._store)
+        self.web = WebSearchService(self._store)
+        self.on_web_progress = None
+        self.on_artifact_progress = None
         self._private: dict[int, Conversation] = {}
         self._private_lock = threading.RLock()
         self._next_private_id = -1
@@ -96,9 +104,12 @@ class ChatService:
             self._next_private_id -= 1
             now = datetime.now()
             conversation = Conversation(
-                ConversationSummary(cid, "Private chat", model, None, 0, now, now), "", (),
+                ConversationSummary(cid, "Private chat", model, None, 0, now, now),
+                "",
+                (),
             )
             self._private[cid] = conversation
+            self.web.register_private(cid)
             return conversation
 
     def get_conversation(self, conversation_id: int) -> Conversation:
@@ -112,6 +123,9 @@ class ChatService:
 
     def discard_private(self, conversation_id: int) -> None:
         self.stop(conversation_id)
+        self.documents.discard_private(conversation_id)
+        self.artifacts.discard_private(conversation_id)
+        self.web.discard_private(conversation_id)
         with self._private_lock:
             self._private.pop(conversation_id, None)
 
@@ -120,7 +134,8 @@ class ChatService:
             conversation = self.get_conversation(cid)
             messages = (*conversation.messages, turn)
             self._private[cid] = replace(
-                conversation, messages=messages,
+                conversation,
+                messages=messages,
                 summary=replace(conversation.summary, message_count=len(messages)),
             )
 
@@ -146,8 +161,12 @@ class ChatService:
         conversation_id: int,
         content: str,
         params: GenerationParams | None = None,
-        *, cancel: threading.Event | None = None,
+        *,
+        cancel: threading.Event | None = None,
+        artifact_request: dict | None = None,
+        web_search: bool = False,
     ) -> None:
+        artifact_request = creation_request(artifact_request)
         model, system_prompt, cancel = self._accept(
             conversation_id, persist_user=content, cancel=cancel
         )
@@ -158,14 +177,20 @@ class ChatService:
             params,
             cancel,
             kind="send",
+            artifact_request=artifact_request,
+            web_search=bool(web_search),
         )
 
     def regenerate(
         self,
         conversation_id: int,
         params: GenerationParams | None = None,
-        *, cancel: threading.Event | None = None,
+        *,
+        cancel: threading.Event | None = None,
+        artifact_request: dict | None = None,
+        web_search: bool = False,
     ) -> None:
+        artifact_request = creation_request(artifact_request)
         model, system_prompt, cancel = self._accept(
             conversation_id, persist_user=None, cancel=cancel
         )
@@ -176,6 +201,8 @@ class ChatService:
             params,
             cancel,
             kind="regenerate",
+            artifact_request=artifact_request,
+            web_search=bool(web_search),
         )
 
     def stop(self, conversation_id: int) -> None:
@@ -204,7 +231,8 @@ class ChatService:
             with self._private_lock:
                 conversation = self.get_conversation(conversation_id)
                 self._private[conversation_id] = replace(
-                    conversation, summary=replace(conversation.summary, model=ref),
+                    conversation,
+                    summary=replace(conversation.summary, model=ref),
                 )
             return
         self._library._update_conversation(
@@ -214,8 +242,11 @@ class ChatService:
         )
 
     def catalog_load(
-        self, ref: ModelRef, options: LoadOptions | None = None,
-        *, cancel: threading.Event | None = None,
+        self,
+        ref: ModelRef,
+        options: LoadOptions | None = None,
+        *,
+        cancel: threading.Event | None = None,
     ) -> LocalModel:
         claim = self._claim_session()
         try:
@@ -237,11 +268,43 @@ class ChatService:
         finally:
             self._release(cancel)
 
-    def _claim_session(self) -> threading.Event:
+    def stream_external(
+        self,
+        model: ModelRef,
+        messages: list[ChatTurn],
+        params: GenerationParams,
+        cancel: threading.Event,
+    ) -> Iterator[str]:
+        """Stateless inference sharing the GUI's claim; no library or memory access."""
+        claim = self._claim_session(cancel)
+        stream = None
+        try:
+            self._session.load(model, cancel=claim)
+            if claim.is_set():
+                raise EngineError("cancelled", "Model request stopped.")
+            stream = self._session.generate(messages, params, claim)
+            yield from stream
+            if claim.is_set():
+                raise EngineError("cancelled", "Model request stopped.")
+        finally:
+            try:
+                if stream is not None:
+                    stream.close()
+            finally:
+                self._release(claim)
+
+    def cancel_external(self, cancel: threading.Event) -> None:
+        """Cancel only this request, even if a newer GUI operation has started."""
+        with self._state_lock:
+            cancel.set()
+            if self._generating and self._cancel is cancel:
+                self._session.request_stop()
+
+    def _claim_session(self, cancel: threading.Event | None = None) -> threading.Event:
         with self._state_lock:
             if self._generating or self._session.status().generating:
                 raise EngineError("generating", "generation already in progress")
-            cancel = threading.Event()
+            cancel = cancel if cancel is not None else threading.Event()
             self._generating = True
             self._active_id = None
             self._cancel = cancel
@@ -290,11 +353,14 @@ class ChatService:
         cancel: threading.Event,
         *,
         kind: str,
+        artifact_request: dict | None = None,
+        web_search: bool = False,
     ) -> None:
         resolved = params if params is not None else GenerationParams()
         thread = threading.Thread(
             target=self._worker,
-            args=(conversation_id, model, system_prompt, resolved, cancel),
+            args=(conversation_id, model, system_prompt, resolved, cancel,
+                  dict(artifact_request) if artifact_request is not None else None, web_search),
             name="chat-generate",
             daemon=True,
         )
@@ -313,23 +379,66 @@ class ChatService:
         system_prompt: str,
         params: GenerationParams,
         cancel: threading.Event,
+        artifact_request: dict | None = None,
+        web_search: bool = False,
     ) -> None:
         pending: list[str] = []
         parts: list[str] = []
         chunks = 0
         started = time.monotonic()
-        during_load = True
+        during_load = False
         error: EngineError | None = None
         stream: Iterator[str] | None = None
         try:
-            self._ensure_loaded(model, conversation_id, cancel)
-            during_load = False
             conv = self.get_conversation(conversation_id)
             messages = (
                 [turn for turn in conv.messages if turn.role in {"user", "assistant"}]
                 if self.is_private(conversation_id)
                 else assemble_prompt(replace(conv, system_prompt=system_prompt))
             )
+            query = next((turn.content for turn in reversed(messages) if turn.role == "user"), "")
+            def web_progress(message):
+                if self.on_web_progress:
+                    self.on_web_progress(conversation_id, message)
+
+            web_context = self.web.context(
+                conversation_id, query, web_search, cancel, web_progress
+            )
+            if web_context:
+                if messages and messages[0].role == "system":
+                    messages[0] = ChatTurn("system", messages[0].content + "\n\n" + web_context)
+                else:
+                    messages.insert(0, ChatTurn("system", web_context))
+            if cancel.is_set():
+                raise EngineError("cancelled", "Model request stopped.")
+            during_load = True
+            self._ensure_loaded(model, conversation_id, cancel)
+            during_load = False
+            images = [] if self.documents.use_images(conversation_id) else None
+            if images is not None and any(
+                doc.images for doc in self.documents.available_documents(conversation_id)
+            ):
+                loaded = self._session.status().loaded
+                if loaded is None or loaded.supports_images is not True:
+                    raise EngineError(
+                        "vision_required",
+                        "This model cannot read images here. "
+                        "Choose an Ollama model marked Vision, or turn off Use images "
+                        "to ask about extracted text only.",
+                    )
+            document_context = self.documents.context(conversation_id, query, image_payload=images)
+            if images:
+                index = next(
+                    i for i in range(len(messages) - 1, -1, -1) if messages[i].role == "user"
+                )
+                messages[index] = replace(messages[index], images=tuple(images))
+            if document_context:
+                if messages and messages[0].role == "system":
+                    messages[0] = ChatTurn(
+                        "system", messages[0].content + "\n\n" + document_context
+                    )
+                else:
+                    messages.insert(0, ChatTurn("system", document_context))
             vault = None if self.is_private(conversation_id) else self.memory_vault
             if vault is not None:
                 query = next(
@@ -354,6 +463,19 @@ class ChatService:
                         messages.insert(0, ChatTurn("system", memory_prompt))
             last_flush = time.monotonic()
             started = time.monotonic()
+            if artifact_request is not None:
+                def progress(message):
+                    if self.on_artifact_progress:
+                        self.on_artifact_progress(conversation_id, message)
+                history = self.documents.source_history(conversation_id)
+                response = self.artifacts.create_from_chat(
+                    conversation_id, messages, self._session, params, cancel,
+                    history[0][1] if history else [], request=artifact_request, progress=progress,
+                )
+                parts.append(response)
+                pending.append(response)
+                chunks = 1
+                return
             stream = self._session.generate(messages, params, cancel)
             for token in stream:
                 chunks += 1
@@ -399,8 +521,11 @@ class ChatService:
                                 )
                     else:
                         self._store.add_message(
-                            conversation_id, "assistant", "".join(parts),
-                            tokens_per_sec=tps, elapsed=elapsed,
+                            conversation_id,
+                            "assistant",
+                            "".join(parts),
+                            tokens_per_sec=tps,
+                            elapsed=elapsed,
                         )
                 except Exception as exc:
                     if error is None:
@@ -440,7 +565,9 @@ class ChatService:
         if self.is_private(conversation_id):
             conversation = self.get_conversation(conversation_id)
             return (
-                conversation.summary.title, conversation.summary.model, conversation.system_prompt,
+                conversation.summary.title,
+                conversation.summary.model,
+                conversation.system_prompt,
                 conversation.messages[-1].role if conversation.messages else None,
             )
         with self._store.locked() as conn:
@@ -464,14 +591,20 @@ class ChatService:
     def _persist_user(self, conversation_id: int, title: str, content: str) -> None:
         if self.is_private(conversation_id):
             self._private_message(conversation_id, ChatTurn("user", content))
+            self.documents.commit_private(conversation_id)
             return
         now = datetime.now().isoformat()
         new_title = title_from(content) if title in DEFAULT_TITLES else None
         with self._store.transaction() as conn:
-            conn.execute(
+            inserted = conn.execute(
                 "INSERT INTO messages (conversation_id, role, content, tokens_per_sec, "
                 "elapsed, created_at) VALUES (?, ?, ?, NULL, NULL, ?)",
                 (conversation_id, "user", content, now),
+            )
+            conn.execute(
+                "UPDATE documents SET message_id = ? WHERE conversation_id = ? "
+                "AND message_id IS NULL",
+                (inserted.lastrowid, conversation_id),
             )
             if new_title is not None:
                 conn.execute(
@@ -490,9 +623,11 @@ class ChatService:
                 conversation = self.get_conversation(conversation_id)
                 if conversation.messages and conversation.messages[-1].role == "assistant":
                     self._private[conversation_id] = replace(
-                        conversation, messages=conversation.messages[:-1],
-                        summary=replace(conversation.summary,
-                                        message_count=len(conversation.messages) - 1),
+                        conversation,
+                        messages=conversation.messages[:-1],
+                        summary=replace(
+                            conversation.summary, message_count=len(conversation.messages) - 1
+                        ),
                     )
             return
         now = datetime.now().isoformat()
@@ -552,7 +687,18 @@ class ChatService:
     @staticmethod
     def _wrap_error(exc: BaseException, *, during_load: bool) -> EngineError:
         code = "load_failed" if during_load else "backend_unavailable"
-        if isinstance(exc, EngineError) and exc.code in {code, "generating", "cancelled"}:
+        if isinstance(exc, EngineError) and exc.code in {
+            code,
+            "generating",
+            "cancelled",
+            "load_timeout",
+            "context_full",
+            "vision_required",
+            "document_failed",
+            "artifact_failed",
+            "web_failed",
+            "not_found",
+        }:
             return exc
         return EngineError(code, str(exc))
 

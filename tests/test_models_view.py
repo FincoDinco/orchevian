@@ -13,6 +13,7 @@ from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import BackendName, LocalModel, ModelRef
 from llm_engine.services.catalog import CatalogService
 from llm_engine.services.session import ModelSession, SessionStatus
+from llm_manager_app.model_names import BACKEND_ORDER, BACKEND_TITLES
 
 
 def _qapp():
@@ -159,7 +160,8 @@ def test_model_search_filters_backends_and_clears_hidden_selection() -> None:
         assert not view._load_btn.isEnabled()
         assert not view._chat_btn.isEnabled()
         view._search.clear()
-        assert view.selected_model().ref.name == "qwen"
+        first_backend = next(key for key in BACKEND_ORDER if key in {"ollama", "gguf"})
+        assert view.selected_model().ref.backend == first_backend
         assert not view._list_empty.isVisible()
     finally:
         view.close()
@@ -197,13 +199,14 @@ def test_models_view_groups_by_backend_and_banners(tmp_path: Path) -> None:
             item = widget.item(row)
             assert item is not None
             labels.append(item.text())
-        assert labels[0] == "Ollama"
+        assert labels[0] == BACKEND_TITLES[BACKEND_ORDER[0]]
         assert "Llama" in labels
         assert "MLX" in labels
         assert "Unavailable" in labels
         assert "GGUF" in labels
         assert "Tiny" in labels
-        assert labels.index("Ollama") < labels.index("GGUF") < labels.index("MLX")
+        headings = [label for label in labels if label in BACKEND_TITLES.values()]
+        assert headings == [BACKEND_TITLES[key] for key in BACKEND_ORDER]
         banner = view.findChild(QLabel, "modelsBanner")
         assert banner is not None
         assert "MLX requires macOS Apple Silicon and extra 'mlx'" in banner.text()
@@ -371,7 +374,8 @@ def test_main_window_models_section_swaps_panes(tmp_path: Path) -> None:
         models_list = window.findChild(QListWidget, "modelsList")
         assert models_list is not None
         texts = [models_list.item(i).text() for i in range(models_list.count())]
-        assert texts[0] == "Ollama"
+        first_backend = next(key for key in BACKEND_ORDER if key in {"ollama", "mlx"})
+        assert texts[0] == BACKEND_TITLES[first_backend]
         assert "Llama" in texts
         window._models.chat_with_selected()
         assert window._sidebar.current_section() == "chats"

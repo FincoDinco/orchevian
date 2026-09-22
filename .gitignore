@@ -9,6 +9,7 @@ build/
 
 # Virtualenv / uv
 .venv/
+.venv-package/
 
 # Tests / lint
 .pytest_cache/

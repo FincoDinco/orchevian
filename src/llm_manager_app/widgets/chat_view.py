@@ -19,11 +19,14 @@ from PySide6.QtWidgets import (
 from llm_engine.domain.models import ChatTurn, Conversation, GenerationParams, LocalModel, ModelRef
 from llm_manager_app.icons import icon
 from llm_manager_app.model_names import ModelNames
+from llm_manager_app.widgets.artifacts import ArtifactPanel
+from llm_manager_app.widgets.attachments import AttachmentPanel
 from llm_manager_app.widgets.composer import Composer
 from llm_manager_app.widgets.inspector import Inspector
 from llm_manager_app.widgets.labels import ElidedLabel
 from llm_manager_app.widgets.model_picker import ModelPicker
 from llm_manager_app.widgets.transcript import Transcript
+from llm_manager_app.widgets.web_sources import WebSources
 
 
 class ChatView(QWidget):
@@ -55,6 +58,10 @@ class ChatView(QWidget):
         self._error_plain_id: int | None = None
         self._undo_assistant: ChatTurn | None = None
         self._rejected_drafts: dict[int, str] = {}
+        self._drafts: dict[int, str] = {}
+        self._creation_drafts: dict[int, bool] = {}
+        self._web_drafts: dict[int, bool] = {}
+        self._web_progress: dict[int, str] = {}
         self._rejected_banners: dict[int, str] = {}
         self._catalog_error: str | None = None
         self._catalog_ready = False
@@ -69,7 +76,7 @@ class ChatView(QWidget):
         self._banner.hide()
 
         self._picker = ModelPicker(self, names=self._names)
-        self._picker.setMaximumWidth(160)
+        self._picker.setMaximumWidth(240)
         self._picker.setEnabled(False)
         self._picker.model_selected.connect(self._on_pick)
         self._picker.manage_models_requested.connect(self.manage_models_requested)
@@ -153,6 +160,19 @@ class ChatView(QWidget):
         self._composer.stop_requested.connect(self.stop)
         self._composer.setEnabled(False)
         self._composer.set_send_enabled(False)
+        self.attachments = AttachmentPanel(self)
+        self.attachments.busy_changed.connect(self._sync_enabled)
+        self._composer.attach_requested.connect(self.attachments.choose)
+        self._composer.files_dropped.connect(self.attachments.import_paths)
+        self.artifacts = ArtifactPanel(self._composer, self)
+        self.web_sources = WebSources(self)
+        self._web_status = QLabel(self)
+        self._web_status.setTextFormat(Qt.TextFormat.PlainText)
+        self._web_status.setWordWrap(True)
+        self._web_status.setObjectName("settingsHint")
+        self._web_status.hide()
+        self._composer.web_search.toggled.connect(self._web_choice_changed)
+        self._web_choice_changed(False)
 
         body = QWidget(self)
         body.setObjectName("chatBody")
@@ -168,7 +188,11 @@ class ChatView(QWidget):
         reading_layout.addWidget(self._banner)
         reading_layout.addWidget(self._content, 1)
         # Keep model selection next to the message, as in the reference composer.
-        self._composer.layout().insertWidget(1, self._picker, 0, Qt.AlignmentFlag.AlignBottom)
+        self._composer.controls.insertWidget(0, self._picker, 0, Qt.AlignmentFlag.AlignVCenter)
+        reading_layout.addWidget(self.attachments)
+        reading_layout.addWidget(self.artifacts)
+        reading_layout.addWidget(self.web_sources)
+        reading_layout.addWidget(self._web_status)
         reading_layout.addWidget(self._composer)
         reading_row = QHBoxLayout()
         reading_row.setContentsMargins(0, 0, 0, 0)
@@ -401,6 +425,9 @@ class ChatView(QWidget):
         self._inspector.flush_prompt()
         self._rejected_drafts.pop(cid, None)
         self._rejected_banners.pop(cid, None)
+        self._creation_drafts.pop(cid, None)
+        self._web_drafts.pop(cid, None)
+        self._web_progress.pop(cid, None)
         if self._generating_id == cid:
             self._generating_id = None
         self._pending = None
@@ -410,6 +437,22 @@ class ChatView(QWidget):
         self.set_conversation(None)
 
     def set_conversation(self, conversation: Conversation | None) -> None:
+        incoming = conversation.summary.id if conversation is not None else None
+        self.attachments.set_conversation(incoming)
+        self.web_sources.set_conversation(incoming)
+        self._web_status.setText(self._web_progress.get(incoming, ""))
+        self._web_status.setVisible(bool(self._web_status.text()))
+        if self._cid != incoming:
+            if self._cid is not None and self._cid >= 0:
+                self._drafts[self._cid] = self._composer.text()
+                self._creation_drafts[self._cid] = self._composer.create_files.isChecked()
+                self._web_drafts[self._cid] = self._composer.web_search.isChecked()
+            self._composer.set_text(self._drafts.get(incoming, ""))
+            self._composer.create_files.setChecked(self._creation_drafts.get(incoming, False))
+            self._composer.web_search.setChecked(self._web_drafts.get(incoming, False))
+        self.artifacts.set_conversation(
+            incoming, conversation.summary.project_id if conversation else None
+        )
         private = conversation is not None and conversation.summary.id < 0
         self._private_banner.setVisible(private)
         self._remember.setVisible(not private)
@@ -497,7 +540,7 @@ class ChatView(QWidget):
             return
         if self._generating_id is not None or self._pending is not None or self._session_busy:
             return
-        if not self._transcript.turns():
+        if not self._transcript.turns() or self.attachments.busy():
             return
         self._inspector.flush_prompt()
         self._pending = ("regenerate", cid, "")
@@ -511,8 +554,25 @@ class ChatView(QWidget):
         self._sync_enabled()
         self.regenerate_requested.emit(cid, self._inspector.params())
 
+    def _web_choice_changed(self, checked):
+        state = "on" if checked else "off"
+        self._regen.setText(f"Regenerate · Web {state}")
+        self._regen.setToolTip(f"Regenerate the last answer with Web search {state}.")
+
+    def on_web_progress(self, cid, message):
+        if cid != self._generating_id:
+            return
+        self._web_progress[cid] = message
+        if cid == self._cid:
+            self._web_status.setText(message)
+            self._web_status.show()
+            self.web_sources.refresh()
+
     def on_accepted(self, conversation_id: int, kind: str) -> None:
         del kind
+        self.attachments.refresh()
+        self.artifacts.refresh()
+        self.web_sources.refresh()
         if self._pending is not None and self._pending[1] == conversation_id:
             self._pending = None
         self._undo_assistant = None
@@ -570,6 +630,10 @@ class ChatView(QWidget):
     ) -> None:
         if conversation_id != self._generating_id:
             return
+        self._web_progress.pop(conversation_id, None)
+        if conversation_id == self._cid:
+            self._web_status.clear()
+            self._web_status.hide()
         self._generating_id = None
         self._inspector.set_generating(False)
         self._inspector.set_last_turn(chunks=chunks, elapsed=elapsed, tps=tps)
@@ -580,15 +644,24 @@ class ChatView(QWidget):
         self._sync_enabled()
         self._composer.focus_edit()
         self.turn_finished.emit(conversation_id)
+        self.attachments.refresh()
+        self.artifacts.refresh()
+        self.web_sources.refresh()
         if cancelled and self._cid == conversation_id:
             self.show_banner(
                 "Stopped. Clear private chat when you are finished."
                 if conversation_id < 0 else "Stopped. Your conversation has been kept."
             )
+        elif self._cid == conversation_id and self.artifacts.request() is not None:
+            self.artifacts.disclosure.setChecked(True)
 
     def on_error(self, conversation_id: int, code: str, message: str) -> None:
         if conversation_id != self._generating_id:
             return
+        self._web_progress.pop(conversation_id, None)
+        if conversation_id == self._cid:
+            self._web_status.clear()
+            self._web_status.hide()
         self._generating_id = None
         self._inspector.set_generating(False)
         if self._cid == conversation_id:
@@ -598,10 +671,18 @@ class ChatView(QWidget):
             self._banner.show()
             self._composer.focus_edit()
         self._sync_enabled()
+        self.attachments.refresh()
+        self.artifacts.refresh()
+        self.web_sources.refresh()
         self.turn_finished.emit(conversation_id)
 
     def on_unloaded(self) -> None:
         cid = self._generating_id
+        self._web_progress.pop(cid, None)
+        if cid == self._cid:
+            self._web_status.clear()
+            self._web_status.hide()
+            self.web_sources.refresh()
         self._generating_id = None
         self._pending = None
         self._inspector.set_generating(False)
@@ -635,7 +716,7 @@ class ChatView(QWidget):
             return
         if self._generating_id is not None or self._pending is not None or self._session_busy:
             return
-        if not text.strip():
+        if not text.strip() or self.attachments.busy():
             return
         self._inspector.flush_prompt()
         self._pending = ("send", cid, text)
@@ -675,7 +756,10 @@ class ChatView(QWidget):
         self._composer.set_generating(generating)
         self._composer.set_blocked(self._session_busy and not generating)
         self._composer.set_send_enabled(has_model and not busy)
-        self._regen.setEnabled(has_model and bool(self._transcript.turns()) and not busy)
+        self._composer.set_importing(self.attachments.busy())
+        self.attachments.set_generating(busy)
+        self._regen.setEnabled(has_model and bool(self._transcript.turns()) and not busy
+                               and not self.attachments.busy())
         self._remember.setEnabled(
             has_model and self._cid >= 0 and bool(self._transcript.turns()) and not busy
         )

@@ -841,6 +841,401 @@ No pid file, no Unix socket, no `flock`, no Finder spawn, no `scripts/dev.sh` so
 
 ---
 
+## Current implementation sequence (updated September 22, 2026)
+
+- Implemented in the working tree: PR 6 local text API, PR 12b Settings API controls, terminal chat/resume, and standalone migration. API tests cover shared-session contention, disconnect cancellation, streaming failures, and real listener stop/restart. The standalone server uses an in-memory library and a separate model session. CLI health reports configuration and explicitly does not inspect the running GUI.
+- Implemented in the working tree: PR 14 prompt templates (sidebar editor, search, reuse in new chat, unsaved-edit protection) and PR 13 storage summary (Models disclosure, per-backend catalog sizes, free space, reveal folder). Regular chat drafts now stay separate per conversation during the app session.
+- Initial v1.1 distribution slice in the working tree: PyInstaller desktop bundles with Python/Qt, explicit resource collection, early multiprocessing diversion, a frozen-app smoke check (temporary database, spawned fake inference, local API, and Qt rendering), platform archives/checksums, and a three-OS artifact workflow. Ollama remains separately installed; MLX/GGUF runtimes are excluded. See `packaging/README.md` for build commands and verification limits.
+- Priority change requested September 15: implement document uploads/reading, persistent project documents, picture/scanned-document understanding, document creation, and optional chat web search before release signing and notarization. The ordered feature milestones below supersede the previous distribution-first sequence.
+- Distribution follows the document milestones: native inference runtime bundles by platform, release signing/notarization, installers, and clean-machine validation. Continue updating the preview build and smoke checks as features introduce dependencies. Preview packaging does not establish a released or signed application.
+- Validation on September 15: all 401 tests passed (loopback tests required execution outside the sandbox), Ruff passed, and the source smoke check passed in the isolated packaging environment. After accepting the Xcode license, the macOS arm64 bundle built successfully and passed all five frozen smoke checks; its archive and SHA-256 sidecar were generated in `dist/`. The three-OS workflow, clean-machine launches, and real-model inference in the packaged app remain unverified.
+- September 22 preview refresh: rebuilt the macOS arm64 bundle with the artifact-revision fixes and passed all ten current frozen smoke checks. The checksum-verified archive also passed after extraction outside the checkout into a temporary path containing spaces with Python environment overrides removed. Reports: `dist/smoke-report.json` and `dist/archive-smoke-report.json`. This used fake inference and temporary data on the development Mac. Clean-machine/other-platform launches, packaged real-model inference, and native Office layout/recalculation remain unverified; Word access was not retried.
+- September 22 broader model acceptance: `scripts/check_model_matrix.py` passed all nine cases (spreadsheet and slide creation/revision, source-grounded writing, four synthetic web-evidence cases including prompt injection, and two live searches) with the installed Qwen 3.5 4B MLX model in `dist/model-matrix-08/`. Fixes: arithmetic formula validation and circular-reference repair, exact-subject search queries, no retrieval timestamps in the model prompt, and a shared 8-second connection budget across a host's addresses with timed-out hosts skipped. After those fixes, 651 tests passed and the rebuilt preview and extracted archive passed all ten smoke checks. Bounded cases only; native Office layout/recalculation and clean-machine checks remain open.
+- September 22 regression validation: all 601 tests passed with loopback access; Ruff and `git diff --check` passed. The initial sandboxed run failed ten loopback-dependent tests, all resolved by the complete rerun outside the sandbox. Existing Qt signal-disconnect and Starlette deprecation warnings remain.
+
+The numbered rollout below remains historical context; use this status and `PROJECT_CONTEXT.md` to distinguish implemented work from planned features.
+
+## Next feature milestones — documents and project workspace
+
+User-approved priorities, September 15, 2026. Milestones 1–3 are implemented in
+the working tree (milestone 3 uses Ollama for vision and separately installed Tesseract
+for English OCR). Milestones 4 and 5 have initial implementations as described below;
+bounded real-model creation/revision and sourced-answer fixtures have passed.
+Broader model quality, native Office layout/recalculation, and milestone 6
+remain outstanding. Complete them before release
+signing/notarization. Extend the existing
+Projects home and chat workspace; preserve the local-first Python/Qt architecture.
+
+### 1. Chat uploads and document reading
+
+Working-tree status: composer uploads/drop, cancellable isolated readers, original
+storage in SQLite, draft removal, previews/export, bounded source context grouped
+by question, and private-chat cleanup are implemented. Supported inputs are PDF,
+DOCX, XLSX, CSV/TSV, UTF-8 text, and Markdown. Limits: 20 MB/file, 20 files/chat,
+200,000 extracted characters/file, 8,000 source-data characters/reply. Source
+history retains each saved question's latest generation; regeneration replaces
+that question's excerpts along with its answer. Private source previews cover the
+latest reply only. Real-model answer quality and clean-machine packaged document
+reading still need manual acceptance checks.
+
+Provide an attachment button and drag-and-drop in the composer. Users can attach
+one or more files, see their names and processing state, remove an attachment
+before sending, and reopen saved attachments after restarting the app.
+
+Start with PDF, Word (`.docx`), Excel (`.xlsx`), CSV, plain text, and Markdown.
+Extract readable text and table data while preserving useful source locations:
+PDF pages, document headings, and spreadsheet sheet names/cell ranges. Report
+unsupported, encrypted, corrupt, or unreadable files clearly. Image-only pages
+must be identified as needing the visual-reading milestone, never treated as an
+empty successful import. Expand to PowerPoint (`.pptx`) and additional formats
+after the shared import path works.
+
+Build one engine-owned file/import service for both chat attachments and project
+files: managed local copies, file metadata, extraction status, bounded background
+processing, cancellation, and persistent references through additive migrations.
+The GUI calls services and does not run document parsers on its main thread.
+Use relevant extracted passages within the model's context budget; show which
+files/passages were supplied and preserve that provenance for each response.
+Treat document contents as reference material, not instructions authorizing actions.
+
+Acceptance: upload a PDF, DOCX, and XLSX, ask questions whose answers require their
+contents, follow the displayed page/sheet references, restart and reopen the files,
+and cancel or recover from a failed import without losing the chat. Verify that
+large documents produce a visible context limit rather than silent whole-file
+claims. Regular attachments persist; private-chat attachments are temporary and
+are cleared with the private conversation, without entering the library or vault.
+
+### 2. Project documents available across conversations
+
+Working-tree status: project home has Files with upload, progress/cancel, preview,
+save original, replace, and confirmed removal. It reuses the chat document readers
+and limits, with up to 20 files per project. The current project's files are
+available to new and existing chats on future turns. Each chat's **Project files**
+button selects files for retrieval; selections persist, and newly uploaded files
+start enabled. Chat attachments and selected project files share the 8,000-character
+source-data budget. Retrieval is keyword-based, with versioned source excerpts
+saved for each question's latest response.
+
+Retention: replacement publishes a new version only after successful extraction;
+failed or cancelled replacements leave the current version usable. Replacement
+and removal delete the old original/extraction while retaining excerpts already
+supplied to replies. Moving a chat changes future project-file retrieval, keeps its
+own attachments and source history, and leaves each project's files with its
+project. Prior answers still remain in conversation history. Deleting a project
+removes its shared files, keeps its chats as unassigned, and preserves their own
+attachments and saved source excerpts. Deleting a chat never deletes shared files.
+Private Chat and the stateless API exclude project files. Real-model answer quality
+and clean-machine packaged reading remain manual acceptance checks.
+
+Add a **Files** area to the existing project home with upload, file list, processing
+status, preview/open, replace, and remove actions. Users upload a document once;
+new and existing conversations in that project can reference it on subsequent
+turns. Project files and their index persist across app restarts.
+
+Retrieve relevant passages from the current project's files on each response,
+alongside attachments explicitly supplied to that chat. Let users select specific
+files and inspect the sources used. Do not insert every entire document into every
+prompt. Updating or removing a project file changes future retrieval; prior
+responses retain a record of the source version they used. Define file retention
+when deleting a project or moving a conversation so shared files are not accidentally
+deleted and unrelated project documents do not appear in future context.
+
+Acceptance: upload a brief and spreadsheet to one project, reference both from
+two separate conversations, restart and continue, replace/remove a file and verify
+future context changes. A different project, an unassigned chat, Private Chat,
+and the stateless local API must not automatically receive those project files.
+
+### 3. Pictures and scanned documents
+
+Working-tree update, September 16: PNG/JPEG/WebP import, normalized image previews,
+selected PDF-page rendering, and local English OCR through Tesseract's C API run
+inside cancellable parser processes. The runtime is installed separately and missing
+OCR has explicit setup guidance. PDF import selects up to eight visual/OCR pages;
+ordinary text extraction remains capped at 200 pages. Inputs are capped at 20 MB
+and 25 megapixels, previews at a 2,048-pixel edge and 2 MB, and replies at four images.
+A per-chat Use images switch distinguishes vision from extracted-text-only context.
+Ollama capabilities come from /api/show and are checked before image generation;
+MLX/GGUF reject image input and can use OCR text. Rendered images persist with chat
+or project originals through migration 005; private images stay in memory. Source
+records include image/page labels, image hashes, and project versions. Replacement
+and deletion discard old rendered bytes while retaining prior source metadata.
+
+Validation covers real local OCR, isolated parser cancellation, image bounds, project
+scoping/version retention, text-only rejection, and image-bearing turns crossing the
+spawned model boundary. Real Ollama visual answer quality, additional OCR languages,
+MLX/GGUF vision, and clean-machine platform acceptance remain unverified/deferred.
+
+
+Support picture attachments (initially PNG, JPEG, and WebP), scanned PDF pages,
+and visual content such as diagrams and charts. Add explicit backend/model
+capability reporting and image-bearing chat inputs; offer a compatible local
+vision model when the current model cannot interpret images. Start the backend
+integration with Ollama, then add supported MLX/GGUF combinations as their runtime
+support is implemented and verified.
+
+Provide a local OCR path for extracting text from scanned documents. Keep OCR
+text extraction distinct from interpreting visual layout, charts, and pictures.
+Show processing progress and page limits, and allow page selection for long PDFs.
+Reuse the attachment/project file store and preserve page/image provenance.
+
+Acceptance: read a photographed page, answer a question about a chart using a
+vision-capable model, and reference an indexed scanned PDF from another chat in
+the same project. A text-only model must clearly report its visual limitation;
+it must not silently discard images or claim to have seen them. Verify cancellation,
+image-size limits, and private-chat cleanup through the actual worker processes.
+
+### 4. General document and artifact creator
+
+Working-tree update, September 17: an explicit **Create files** composer choice
+drives a bounded `create_documents` JSON tool flow (one correction attempt) over
+the existing model session. Strict declarative specifications feed isolated native
+generators for DOCX/PDF/RTF/TXT/Markdown, XLSX/CSV/TSV, PPTX, HTML,
+JSON/YAML/XML, and SVG/PNG. PDF forms have functional text and checkbox fields;
+slides have editable titles/bullets and speaker notes; sheets have formats,
+restricted formulas and bar/line charts; diagrams are ordered process steps.
+Content/format capabilities are explicit rather than implying arbitrary layouts.
+
+Migration 006 stores versioned specifications, files, previews and source snapshots.
+Generated-file cards support preview, explicit save/open, latest-batch ZIP, revision,
+project copies with retained reference text, and reusable specification templates.
+Project-home creation choice transfers to its new chat. Creation uses selected
+attachment/project context and preserves earlier versions; failed batches publish
+nothing. Private results stay in memory and cannot enter templates/projects.
+The API and memory capture do not invoke these tools. See README for limits.
+
+Validation includes every advertised format, native structure read-back, rendered
+PNG previews, form field types, slide notes, formula/chart retention, malformed
+tool data, bounded repair, isolated cancellation, version retention/restart,
+project retrieval and the Qt chat flow. PDF/image previews use generated output;
+Office previews are content renderings, not native Office layout verification.
+Spreadsheet formulas require recalculation in Excel/LibreOffice. Real-model
+creation quality, native Office layout and clean-machine packaging remain acceptance
+gaps; Ollama reported no installed models during this implementation check.
+General autonomous tools, arbitrary code execution, preservation of imported
+Office layouts and complex freeform diagrams are not included.
+
+September 21 acceptance continuation: `scripts/check_artifact_workflow.py` now
+checks actual HTML table cells and visible text, native SVG labels, numeric JSON
+budgets, slide facts/notes, and PDF field/widget values after filling and reopening.
+It isolates the extended fixture from the revised project copy to avoid conflicting
+participant counts. Regression tests catch the earlier false pass on escaped HTML,
+wrong JSON costs, wrong slide costs, sidecar-only diagram validation, and participant
+numbers that appeared only as substrings of budget amounts.
+
+Live runs used the already installed `avan-ag/Qwen3.5-4B-Uncensored-MLX-4bit`,
+temperature zero and a 7,000-token limit, with isolated fixture libraries. They exposed
+missing attribution, invalid form content, misplaced slide notes, and malformed
+revision JSON. Creation instructions and repair reminders now clarify these fields;
+missing identifiable attribution in source-grounded documents/decks invokes the
+existing repair attempt. This validates presence, not whether a claim is supported.
+Writers suppress an exact leading heading that duplicates their automatic title.
+
+Earlier local report: `dist/artifact-acceptance-10/report.json`; review summary:
+`dist/artifact-acceptance-review.json`. The primary DOCX/PDF/XLSX/PPTX batch passed
+content read-back and ZIP export. The revision failed after one repair, retaining
+the originals. Earlier extended runs produced the form/HTML/JSON/SVG batch but
+had incomplete source attribution. Previews were reviewed; the latest PDF and
+proposal content preview no longer duplicate the title. These checks are complete
+with a **failed end-to-end acceptance result** for this model. Do not mark this
+milestone accepted. Native Office layout, recalculation and clean-machine checks
+remain separate gaps. No models were downloaded or saved user chats opened.
+Validation: 580 full-suite tests passed with loopback access; subsequent rendering
+and checker changes passed 61 focused tests. Ruff and whitespace checks passed.
+Existing Qt signal-disconnect and Starlette deprecation warnings remain.
+
+Subsequent September 21 reliability fix: the failed revision had a complete files
+array and was missing only the final outer `}`. The parser can append that one
+delimiter and then run all existing schema/content checks. It rejects other
+truncation, multiple values, duplicate keys, unsafe filenames and invalid content.
+Explicit revisions are enforced as exactly one file with the selected filename.
+Wrong-name/multiple-file responses get the same single repair opportunity and
+cannot publish a partial batch or overwrite retained originals.
+
+Missing-attribution repairs now supply an exact paragraph/slide-note shape and
+collect errors across files. The extended fixture explicitly names the PDF fields
+to avoid conflating a visible consent label with an internal field name.
+Two consecutive unchanged-code full runs passed:
+`dist/artifact-acceptance-13/report.json` and
+`dist/artifact-acceptance-14/report.json`. Both cover the primary batch, the
+40-to-50-participant revision with unchanged budget and retained attribution,
+extended forms/HTML/JSON/SVG, ZIP export, project reuse and persistence.
+The prior failed acceptance result is superseded for this bounded fixture.
+This does not establish arbitrary-model reliability or complete milestone 4's
+native-layout/distribution acceptance. Word inspection was attempted but automatic
+approval review rejected the Open action because Computer Use was not approved
+for Word; native Office layout and recalculation remain unverified.
+Validation: 600 full-suite tests passed; final attribution repairs and regression
+coverage passed 78 focused tests. Ruff and whitespace checks passed.
+
+User clarification, September 15: this must create a wide range of documents.
+Word and Excel are examples, not the scope of the feature. Users describe the
+deliverable they need, and the app creates usable files grounded in project sources
+and chat attachments. Presentations and other document families belong in this
+pre-release milestone, rather than being postponed until after distribution.
+
+Target output coverage:
+
+| Document family | Examples | Formats |
+| --- | --- | --- |
+| Written documents | Reports, proposals, letters, resumes, manuals, meeting notes | DOCX, PDF, RTF, TXT, Markdown |
+| Spreadsheets and tabular data | Budgets, trackers, analyses, inventories | XLSX, CSV, TSV |
+| Presentations | Slide decks, briefings, training materials | PPTX, PDF |
+| Forms and reusable documents | Fillable forms, worksheets, checklists, reusable templates | Fillable PDF, DOCX, XLSX as appropriate |
+| Web documents | Standalone HTML reports, reference pages, printable documents | HTML with required local assets |
+| Structured files | Data exports, configuration documents, interchange files | JSON, YAML, XML |
+| Diagrams and charts | Flowcharts, process diagrams, data visualizations | SVG, PNG, PDF |
+
+This is the initial implementation target, not a claim that any file extension is
+automatically supported. Add formats through a generator registry that reports
+available formats, editable features, preview support, and required dependencies.
+Keep the user flow centered on the requested document; offer format choices when
+useful and disclose an unsupported format before generation. Track import, creation,
+and preview capabilities separately so creating a format does not falsely imply
+that the app can also read or revise arbitrary existing files in that format.
+
+Example requests: "Make a proposal and presentation from this brief," "Create a
+fillable intake form," "Build a budget with charts from these quotes," and "Export
+the findings as a PDF report and a standalone HTML page." Allow one request to
+produce several related files and offer a ZIP download for multi-file deliverables.
+
+Add engine-owned, named creation tools with validated document specifications and
+format-specific generators. Connect them to the model interaction through a bounded
+tool-call loop, with a structured-output fallback where supported. Generated
+content is data for the generators, rather than arbitrary model-written Python
+executed on the user's machine. Preserve the existing one-operation model session
+and stop controls; show tool progress and actionable errors in the chat.
+
+Show generated files as artifact cards with preview, open, Save As, and **Add to
+project** actions. Support follow-up revisions as new versions, format conversion
+where supported, and reusable templates. Written documents need headings, lists,
+tables, and page layout; spreadsheets need typed cells, sheets, formatting, formulas,
+and charts; presentations need editable slide elements and speaker notes; fillable
+PDFs need functional fields. Structured files must parse successfully, and HTML
+deliverables must work locally with their supplied assets.
+
+Validate each format with its appropriate reader or renderer. Check spreadsheet
+formulas and distinguish calculated results from values that require recalculation
+in the spreadsheet application. Render document, slide, and PDF previews for layout
+verification. Saving must preserve existing user files unless the user chooses to
+replace them. A renamed text file does not count as a native document format.
+
+Acceptance: create and open a proposal, budget with charts, editable slide deck,
+fillable PDF, HTML report, structured data export, and diagram grounded in project
+documents. Exercise every advertised output format with a real format-specific
+validation check. Revise generated artifacts from chat, export a related multi-file
+deliverable, save locally, and add results to the project for later reference using
+their retained content or a supported reader. Test malformed model tool arguments,
+unsupported formats, failed generation, cancellation, and a model that cannot
+produce the required tool output. Verify previews and file validity, not only that
+an output file exists.
+
+### 5. Optional web search at the prompt
+
+Working-tree status (September 17): engine-owned search/page retrieval, the shared
+composer toggle, per-draft choice and project transfer, explicit regeneration
+state, progress/stop, and retained linked source excerpts are implemented. The
+provider is Bing public HTML search. Per the September 17 distribution requirement,
+there is no API, key, subscription, user account, or hosted Orchevian backend.
+Only a focused query built from the current message (capped at 500 characters)
+goes to the provider. Conversational filler is removed, and simple recent Fed-rate
+questions expand to a neutral dated Federal Reserve decision search. A
+disposable reader enforces a 45-second deadline, public DNS/IP/redirect checks,
+1 MB pages, at most three readable pages, and 8,000 characters of source context.
+Regular evidence is stored per user turn in migration 007; regeneration replaces
+it. Private evidence remains in memory and cannot be recreated after clearing.
+Sources, failure/empty-result behavior, cancellation, provider configuration and
+GUI routing have deterministic tests; the desktop smoke path includes an offline
+spawned retrieval fixture. No new third-party runtime dependency was added.
+
+Use `scripts/check_web_search.py` to check live search and result-page reading.
+Real-model sourced-answer quality and frozen clean-machine provider access remain
+acceptance requirements. Live Bing search and page reading passed on September 17,
+retrieving Python documentation/tutorial pages with a visible partial-read warning.
+The relevance fix was checked against the reported Fed-rate question: its focused
+query retrieved rate-decision articles. Up to eight candidates are considered;
+subject matches in titles/URLs and at least 50% topic-term coverage in extracted
+passages are required. The app never pads to three pages with unrelated evidence.
+No qualifying results produces a visible error. Regression tests reject Cleveland
+Clinic, dictionary pages, misleading result titles, and another topic's unrelated
+results. These lexical checks do not guarantee semantic relevance or freshness.
+September 18 continuation: added `scripts/check_web_answer.py` to exercise the
+actual ChatService with a selected installed model and a temporary library. It
+retains a JSON report, checks for a Markdown citation to retrieved evidence, and
+checks zero retrieval on a subsequent search-off turn. The existing
+`avan-ag/Qwen3.5-4B-Uncensored-MLX-4bit` model initially omitted citations; clearer
+source instructions produced a citation and an answer consistent with the
+retrieved excerpts for the reported Fed-rate question. A follow-up fixed the
+missing event date by preserving up to two short date lines and adjacent labels
+inside the 2,400-character excerpt budget and giving an explicit dated-answer
+format. The live check now includes the event date, citation, and search-off
+verification. Its optional `--expect-date` checks visible prose rather than URL
+paths, without providing the expected answer to the model. This is a limited
+live integration check, not full sourced-answer acceptance. Broader quality and
+clean-machine access remain open. Model-picker tests now use temporary settings
+so saved app defaults cannot affect their empty-state assertions.
+Two synthetic-source checks with the same MLX model also passed: a later page
+publication date did not replace the stated event date, and an unknown event
+date produced explicit uncertainty with a source citation.
+Validation: 555 tests passed with loopback access, Ruff passed, and the diff has
+no whitespace errors. Qt signal-disconnect and Starlette deprecation warnings
+remain; the frozen bundle was not rebuilt in this continuation.
+The date follow-up passed 61 focused web/UI/check-script tests, three desktop
+smoke/packaging regressions, Ruff, and the whitespace check. The previous full
+suite result above predates these date changes.
+
+The requirements below remain the acceptance contract.
+
+Add a checkable **Web search** button beside the prompt in the shared composer,
+including the project-home composer. Default to off and make the on/off state
+obvious and keyboard accessible. Keep the choice with the conversation's draft;
+project-home drafts retain their own choice and transfer it when creating a chat.
+Capture the setting when submitting a turn so navigating or changing a different
+draft cannot change an active request. Regeneration must show and use an explicit
+search setting rather than silently inheriting another conversation's choice.
+
+When enabled, the app can search the web and read relevant public result pages
+before the local model answers. Implement an engine-owned provider interface and
+bounded page extraction/retrieval, with background progress (searching, reading,
+answering), timeouts, context limits, and the existing stop controls. Choose and
+document the provider and any credentials/cost during implementation; do not assume
+the inference backend itself supplies search. This milestone covers search and
+reading public pages; general interactive browser automation is separate work.
+
+Show source titles and clickable URLs alongside the response, with enough retained
+retrieval metadata to identify what supported the answer. Treat retrieved page
+contents as reference data, not instructions authorizing tool actions. Failed or
+empty searches must be visible; never imply the model searched when it did not.
+Opening a cited source uses the user's browser. Restrict fetched URLs to public
+HTTP(S) pages and validate redirects so page reading cannot access local services
+or files.
+
+Off means no search or page-fetch requests for that turn. Turning search on makes
+the network boundary clear: queries go to the search provider and requested pages
+are fetched from their sites; local model inference remains local. Do not upload
+project files or entire saved conversations as part of the search operation.
+Private Chat starts with search off on every new private session; if explicitly
+enabled there, its search context/history remains temporary and is cleared with
+that conversation. Background memory capture and stateless API requests must not
+inherit a GUI search toggle.
+
+Acceptance: verify zero search/page-fetch calls while off; enable the prompt-line
+button, ask a question needing current information, and receive linked sources
+from actual retrieval. Turn it off for the next message and verify no retrieval.
+Test project-home transfer, switching conversations, regeneration, provider/setup
+errors, empty results, cancellation during page reads, public-URL enforcement,
+and private-session cleanup. Include provider fakes for deterministic tests and a
+documented live-provider check before calling browsing supported.
+
+### 6. Distribution completion
+
+After these feature milestones, update the packaged dependency/resource manifest,
+exercise import, image handling, project retrieval, artifact creation, and the web
+search integration in frozen
+smoke checks, and validate real models on clean machines. Complete platform-native
+runtime bundles, release signing/notarization, installer formats, icons/version
+metadata, and upgrade/rollback checks. The existing preview build remains a
+development verification path throughout implementation.
+
 ## Rollout Plan
 
 1. Engine + migration on a **copy** of `data.db` in tests.

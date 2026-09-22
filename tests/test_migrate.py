@@ -79,12 +79,12 @@ def test_fresh_db_applies_schema_sql(tmp_path: Path) -> None:
             )
         }
     store.close()
-    assert version == 2
+    assert version == 7
     assert "schema_migrations" in names
     assert "conversations" in names
     assert "project_id" in conv_sql
     reopened = SqliteStore(db)
-    assert reopened.schema_version() == 2
+    assert reopened.schema_version() == 7
     reopened.close()
     assert "idx_messages_conversation_id_id" in indexes
     assert "idx_conversations_updated_at" in indexes
@@ -207,7 +207,7 @@ def test_001_contains_1_is_noop(tmp_path: Path) -> None:
         ).fetchone()[0]
     store.close()
     assert sql_after == sql_before
-    assert versions_before == versions_after == {1, 2}
+    assert versions_before == versions_after == {1, 2, 3, 4, 5, 6, 7}
     assert seq == 8
 
 

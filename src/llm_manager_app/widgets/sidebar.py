@@ -26,7 +26,7 @@ from llm_manager_app.tokens import current_palette, named_tab_width, qcolor
 from llm_manager_app.widgets.conversation_list import ConversationStore
 from llm_manager_app.widgets.settings import APP_NAME
 
-_TAB_NAMES = ("Chats", "Models", "Memory")
+_TAB_NAMES = ("Chats", "Models", "Memory", "Templates")
 _EXPANDED_MIN = 260
 
 CHATS = "chats"
@@ -34,6 +34,7 @@ MODELS = "models"
 MEMORY = "memory"
 PRIVATE = "private"
 SETTINGS = "settings"
+TEMPLATES = "templates"
 
 FOLDER_ALL = "all"
 FOLDER_PROJECT = "project"
@@ -99,6 +100,7 @@ class Sidebar(QWidget):
         self._all_item: QStandardItem | None = None
         self._models_item: QStandardItem | None = None
         self._memory_item: QStandardItem | None = None
+        self._templates_item: QStandardItem | None = None
         self._project_items: dict[int, QStandardItem] = {}
 
         self._collapse_btn = QToolButton(self)
@@ -262,7 +264,7 @@ class Sidebar(QWidget):
             self._settings_open = False
             self._settings_btn.setChecked(False)
             self._view.setCurrentIndex(QModelIndex())
-        if key in {MODELS, MEMORY}:
+        if key in {MODELS, MEMORY, TEMPLATES}:
             self._set_current(self._index_for(key))
             return
         if self.current_section() == CHATS and self._last_section == CHATS:
@@ -313,7 +315,8 @@ class Sidebar(QWidget):
             result = QMessageBox.question(
                 self,
                 "Delete project",
-                f'Delete "{name}"? Conversations will be kept.',
+                f'Delete "{name}" and its shared files? Conversations, chat attachments, '
+                'and earlier source excerpts will be kept.',
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -380,6 +383,11 @@ class Sidebar(QWidget):
         memory.setFont(font)
         self._memory_item = memory
         root.appendRow(memory)
+        if callable(getattr(self._library, "list_templates", None)):
+            templates = _item("Templates", TEMPLATES)
+            templates.setIcon(icon("note"))
+            root.appendRow(templates)
+            self._templates_item = templates
         root.appendRow(chats)
         self._view.expand(chats.index())
 
@@ -397,6 +405,8 @@ class Sidebar(QWidget):
             item = self._models_item
         elif kind == MEMORY:
             item = self._memory_item
+        elif kind == TEMPLATES:
+            item = self._templates_item
         elif kind == _KIND_CHATS:
             item = self._chats_item
         elif kind == _KIND_PROJECT and project_id is not None:
@@ -417,7 +427,7 @@ class Sidebar(QWidget):
 
     def _selection_from_index(self, index: QModelIndex) -> SidebarSelection:
         kind = str(index.data(_KIND_ROLE) or "")
-        if kind in {_KIND_MODELS, MEMORY, PRIVATE}:
+        if kind in {_KIND_MODELS, MEMORY, PRIVATE, TEMPLATES}:
             return SidebarSelection(kind, FOLDER_ALL)
         if kind == _KIND_PROJECT:
             pid = index.data(_ID_ROLE)
@@ -511,6 +521,7 @@ class Sidebar(QWidget):
         if self._all_item is not None:
             self._view.setRowHidden(self._all_item.row(), QModelIndex(), self._collapsed)
         rows = 3 if self._collapsed else 4 + len(self._project_items)
+        rows += int(self._templates_item is not None)
         self._view.setFixedHeight(min(300, rows * 36 + 12))
         rail = self.tab_width()
         chats = self._chats_item

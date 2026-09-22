@@ -45,14 +45,23 @@ from PySide6.QtWidgets import (
 
 from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import LoadOptions, LocalModel, ModelRef
-from llm_engine.services.discovery import GIB, DiscoveryService, detect_hardware
+from llm_engine.services.discovery import (
+    GIB,
+    DiscoveryService,
+    RemoteModel,
+    detect_hardware,
+    quantization_bits,
+)
 from llm_engine.services.downloads import DownloadChoice, DownloadPlan, DownloadService
+from llm_engine.services.ollama_downloads import OllamaDownloadService
 from llm_engine.services.session import SessionStatus
+from llm_engine.services.storage import summary as storage_summary
 from llm_manager_app.icons import icon
 from llm_manager_app.model_names import BACKEND_ORDER, BACKEND_TITLES, ModelNames
 from llm_manager_app.tokens import current_palette, qcolor
 from llm_manager_app.widgets.downloads_view import DownloadManager, DownloadsView
 from llm_manager_app.widgets.model_discovery import ModelDiscovery
+from llm_manager_app.widgets.storage_summary import StoragePanel
 
 _BACKEND_ORDER = BACKEND_ORDER
 _BACKEND_LABELS = BACKEND_TITLES
@@ -210,6 +219,7 @@ class ModelsView(QWidget):
     stop_requested = Signal()
 
     _listed = Signal(object, object)
+    _storage_updated = Signal(object)
     _loaded = Signal(object)
     _unloaded = Signal()
     _failed = Signal(object)
@@ -246,6 +256,7 @@ class ModelsView(QWidget):
         self._thread = _WorkThread(self)
         self._discovery_service = DiscoveryService()
         self._downloads = downloads
+        self._ollama_downloads = OllamaDownloadService()
         self.downloads = DownloadManager(self)
         self.download_view = DownloadsView(self.downloads, self)
         self.download_view.hide()
@@ -312,6 +323,7 @@ class ModelsView(QWidget):
         self._layout.setSpacing(16)
         self._layout.addLayout(header)
         self._tabs = QTabBar(self)
+        self._tabs.setDrawBase(False)
         self._tabs.setExpanding(False)
         self._tabs.addTab("Downloaded")
         self._tabs.addTab("Get more models")
@@ -329,6 +341,8 @@ class ModelsView(QWidget):
         self._workspace: QWidget = self._catalog_pane
         self._layout.addWidget(self._banner)
         self._layout.addWidget(self._catalog_pane, 1)
+        self.storage = StoragePanel(self, reveal=self._reveal)
+        self._layout.addWidget(self.storage)
 
         self._detail = QWidget(self)
         self._detail.setObjectName("detailPane")
@@ -482,6 +496,7 @@ class ModelsView(QWidget):
 
         queued = Qt.ConnectionType.QueuedConnection
         self._listed.connect(self._on_listed, queued)
+        self._storage_updated.connect(self.storage.apply_summary, queued)
         self._loaded.connect(self._on_loaded, queued)
         self._unloaded.connect(self._on_unloaded, queued)
         self._failed.connect(self._on_failed, queued)
@@ -520,10 +535,11 @@ class ModelsView(QWidget):
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 2)
         split.setSizes([300, 560])
-        self._layout.addWidget(split, 1)
+        self._layout.insertWidget(self._layout.indexOf(self.storage), split, 1)
         self._workspace = split
 
     def _switch_tab(self, index: int) -> None:
+        self.storage.setVisible(index == 0)
         self._workspace.setVisible(index == 0)
         self._discovery.setVisible(index == 1)
         self._refresh_btn.setVisible(index == 0)
@@ -541,11 +557,12 @@ class ModelsView(QWidget):
         count = len(self._models_by_id)
         total = sum(model.size_bytes for model in self._models_by_id.values())
         self._summary.setText(
-            f"{count} local model{'s' if count != 1 else ''} · {_format_size(total)} on disk"
+            f"{count} local model{'s' if count != 1 else ''} · {_format_size(total)} reported"
         )
 
     def _discover(self, query: str, format: str, recommended: bool, budget_gb: float = 0) -> None:
         self._discovery_pending = False
+        bits = self._discovery.precision.currentData()
 
         def work() -> None:
             try:
@@ -554,16 +571,31 @@ class ModelsView(QWidget):
                     hardware = replace(hardware, memory_override_bytes=int(budget_gb * GIB))
                 self._emit_job(self._hardware_detected.emit, hardware.summary)
                 selected_format = hardware.recommended_format if format == "auto" else format
-                models = (
-                    self._discovery_service.recommend(hardware, selected_format, query)
-                    if recommended else self._discovery_service.search(query, selected_format)
-                )
+                if selected_format == "ollama":
+                    model = RemoteModel(query.strip(), "ollama", 0, None,
+                                        "Size and availability are checked by Ollama during pull.")
+                    plan = self._ollama_downloads.prepare(model)
+                    self._emit_job(self._discovered.emit, [model], hardware, False)
+                    self._emit_job(self._download_prepared.emit, plan)
+                    return
+                if selected_format == "mlx" and bits is not None:
+                    models = [model for model in self._discovery_service.search(
+                        query, selected_format, limit=100
+                    ) if quantization_bits(model.repo_id) == bits
+                        and (not recommended or model.fit(hardware) == "Likely fits")]
+                else:
+                    models = (
+                        self._discovery_service.recommend(hardware, selected_format, query)
+                        if recommended else self._discovery_service.search(query, selected_format)
+                    )
                 self._emit_job(self._discovered.emit, models, hardware, recommended)
             except Exception as exc:
                 self._emit_job(self._discovery_failed.emit, str(exc))
 
         if self._start_job(work, "discover"):
-            self._discovery.message.setText("Searching Hugging Face…")
+            self._discovery.message.setText(
+                "Preparing Ollama tag…" if format == "ollama" else "Searching Hugging Face…"
+            )
 
     def _download_service(self) -> DownloadService:
         if self._downloads is None:
@@ -588,7 +620,9 @@ class ModelsView(QWidget):
     def _download_model(self, plan: DownloadPlan, choice: DownloadChoice, token: str) -> None:
         if self._closing:
             return
-        self.downloads.add(self._download_service(), plan, choice, token)
+        service = (self._ollama_downloads if plan.model.format == "ollama"
+                   else self._download_service())
+        self.downloads.add(service, plan, choice, token)
         self._sync_downloads()
         self._discovery.message.setText("Added to Downloads. You can keep browsing.")
 
@@ -641,7 +675,7 @@ class ModelsView(QWidget):
             try:
                 self._catalog.delete(model.ref)
                 models, availability = self._catalog.list_models()
-                self._emit_job(self._listed.emit, models, availability)
+                self._emit_catalog(models, availability)
             except Exception as exc:
                 self._emit_job(self._failed.emit, exc)
 
@@ -755,13 +789,21 @@ class ModelsView(QWidget):
         def work() -> None:
             try:
                 models, availability = self._catalog.list_models()
-                self._emit_job(self._listed.emit, models, availability)
+                self._emit_catalog(models, availability)
             except EngineError as exc:
                 self._emit_job(self._failed.emit, exc)
             except Exception as exc:
                 self._emit_job(self._failed.emit, EngineError("backend_unavailable", str(exc)))
 
         return self._start_job(work, "refresh")
+
+    def _emit_catalog(self, models, availability) -> None:
+        self._emit_job(self._listed.emit, models, availability)
+        try:
+            storage = storage_summary(models, availability)
+        except Exception as exc:
+            storage = str(exc)
+        self._emit_job(self._storage_updated.emit, storage)
 
     def load_selected(self) -> None:
         model = self.selected_model()
@@ -1090,6 +1132,9 @@ def _detail_text(model: LocalModel) -> str:
         lines.append(f"Storage managed by {_backend_label(str(model.ref.backend))}.")
     if model.modified_at is not None:
         lines.append(f"Updated {model.modified_at:%b %d, %Y}")
+    capability = ("Images and text" if model.supports_images else "Unknown; refresh the catalog"
+                  if model.supports_images is None else "Extracted text only")
+    lines.append(f"Image input: {capability}")
     if model.details:
         lines.append("")
         lines.extend(f"{key}: {value}" for key, value in model.details.items())

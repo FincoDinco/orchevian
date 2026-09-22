@@ -12,6 +12,15 @@ from llm_engine.domain.errors import EngineError
 from llm_engine.hardware import GIB, Hardware, detect_hardware  # noqa: F401
 
 
+def quantization_bits(name: str) -> int | None:
+    """Read advertised precision from repository/file names; not a memory guarantee."""
+    match = re.search(
+        r"(?:^|[-_./:])(?:I?Q([2-8])(?:[_A-Z0-9]*)|([2-8]|16|32)[-_]?BIT|"
+        r"(?:BF|FP|F)(16|32))(?=[-_.:/]|$)", name.upper(),
+    )
+    return int(next(value for value in match.groups() if value)) if match else None
+
+
 @dataclass(frozen=True, slots=True)
 class RemoteModel:
     repo_id: str
@@ -23,6 +32,10 @@ class RemoteModel:
 
     @property
     def url(self) -> str:
+        if self.format == "ollama":
+            return "https://ollama.com/" + (
+                "" if "/" in self.repo_id else "library/"
+            ) + quote(self.repo_id.split(":")[0], safe="/") + "/tags"
         return "https://huggingface.co/" + quote(self.repo_id, safe="/")
 
     def fit(self, hardware: Hardware) -> str:
