@@ -25,7 +25,8 @@ def test_desktop_entry_smoke_check(tmp_path):
     assert "image decoding, PDF rendering and spawned vision input" in report["checks"]
     assert "isolated artifact generators, previews and ZIP export" in report["checks"]
     assert "isolated web retrieval and retained sources (offline fixture)" in report["checks"]
-    assert len(report["checks"]) == 10
+    assert any(check.startswith("app icon and secret storage") for check in report["checks"])
+    assert len(report["checks"]) == 11
 
 
 def test_missing_frozen_runtimes_explain_packaged_limitation(monkeypatch, tmp_path):
@@ -60,3 +61,22 @@ def test_logging_without_desktop_console(monkeypatch, tmp_path):
         logger.handlers = previous
         logger.setLevel(level)
         logger.propagate = propagate
+
+
+def test_version_is_the_same_everywhere():
+    import tomllib
+
+    import llm_engine
+    import llm_manager_app
+
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    assert llm_engine.__version__ == llm_manager_app.__version__ == version
+
+
+def test_icons_exist_for_every_platform():
+    icons = ROOT / "packaging" / "icons"
+    for name in ("orchevian.icns", "orchevian.ico", "orchevian-512.png"):
+        assert (icons / name).stat().st_size > 1000
+    assert (ROOT / "src" / "llm_manager_app" / "assets" / "orchevian.png").is_file()
+    spec = (ROOT / "packaging" / "orchevian.spec").read_text()
+    assert "orchevian.icns" in spec and "orchevian.ico" in spec

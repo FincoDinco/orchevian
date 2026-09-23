@@ -33,6 +33,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     app = QApplication(args)
     app.setOrganizationName(ORG_NAME)
     app.setApplicationName(APP_NAME)
+    # Window and taskbar icon on Windows and Linux; macOS uses the app bundle's icon.
+    from pathlib import Path
+
+    from PySide6.QtGui import QIcon
+
+    icon = Path(__file__).parent / "assets" / "orchevian.png"
+    if icon.is_file():
+        app.setWindowIcon(QIcon(str(icon)))
+    # Links the running window to Linux's orchevian.desktop entry.
+    app.setDesktopFileName("orchevian")
     settings = make_settings()
     apply_studio(app, theme=ensure_appearance(settings))
     window = MainWindow(settings=settings)

@@ -1,9 +1,9 @@
 """Where Orchevian keeps secrets: search-service keys and the local API key.
 
 The operating system's password vault (macOS Keychain, Windows Credential Manager,
-Linux Secret Service) is used when the `keyring` package is installed and has a
-working backend. Otherwise secrets live in Orchevian's settings, whose file is
-kept private to this account.
+Linux Secret Service) is used through `keyring`. Where no vault works, such as
+Linux without a keyring service, secrets live in Orchevian's settings, whose file
+is kept private to this account.
 """
 
 from __future__ import annotations

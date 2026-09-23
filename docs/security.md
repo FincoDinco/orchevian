@@ -22,9 +22,10 @@ There is no telemetry, analytics or account.
   (normally `~/.local/share/orchevian`). On macOS and Linux the folder is readable only by your
   account (permissions `0700`, files `0600`); older installs are repaired on startup.
   Windows keeps it inside your private user profile.
-- Search-service keys and the local API key are kept private to your account: in the
-  system password vault (Keychain, Credential Manager, Secret Service) when the `keyring`
-  package is installed, otherwise in Orchevian's settings, whose file is owner-only.
+- Search-service keys and the local API key are kept in the system password vault
+  (macOS Keychain, Windows Credential Manager, or Linux Secret Service). On a system
+  without one, such as Linux without a keyring service, they fall back to Orchevian's
+  settings file, which is owner-only.
 - Private Chat is never written to disk.
 
 ## Local API

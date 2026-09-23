@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Orchevian
+GenericName=Local AI Workspace
+Comment=Chat with local AI models, your files, and the web
+Exec=AppRun %U
+Icon=orchevian
+Terminal=false
+Categories=Office;Utility;
+Keywords=AI;LLM;chat;local;
+StartupWMClass=Orchevian

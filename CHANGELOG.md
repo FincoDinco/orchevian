@@ -37,8 +37,8 @@ previously called LLM Manager; existing chats, models, projects, and notes carry
   DNS-rebinding requests.
 - Your data folder, database, logs, and notes are private to your account; older installs
   are repaired on startup.
-- Search and API keys are stored privately to your account, and in the system password
-  vault when the `keyring` package is installed.
+- Search and API keys are stored in the system password vault (Keychain, Credential
+  Manager, Secret Service), or an owner-only file where no vault exists.
 - Replies can't inject raw HTML, images, or non-web links into the chat; hovering a link
   shows where it goes.
 - Build and test workflows pin third-party actions to exact commits.

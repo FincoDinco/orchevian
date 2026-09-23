@@ -36,7 +36,19 @@ to, and keep a personal knowledge base. Your conversations stay on your machine.
 
 ## Install
 
-Orchevian is in development ahead of its 1.0 release. For now, run it from source:
+**Download the app** from the [latest release](https://github.com/FincoDinco/orchevian/releases/latest):
+
+- **macOS** (Apple Silicon): open the `.dmg` and drag Orchevian into Applications.
+- **Windows**: run the `-setup.exe` installer.
+- **Linux**: download the `.AppImage`, make it executable, and run it.
+
+The builds aren't code-signed yet, so the first launch shows a warning; the release notes
+explain how to open the app. You'll also need [Ollama](https://ollama.com) to run models.
+Then open **Models** in Orchevian to download one.
+
+### Run from source
+
+To use GGUF or MLX models directly, or to develop Orchevian:
 
 1. Install [Python 3.13](https://www.python.org/downloads/) and
    [uv](https://docs.astral.sh/uv/getting-started/installation/).
@@ -57,9 +69,7 @@ Orchevian is in development ahead of its 1.0 release. For now, run it from sourc
 4. Open **Models** to download a model, then start a chat. Each model has its own
    license (shown on its download page); check it before commercial use.
 
-Preview desktop builds that don't need Python are described in
-[packaging/README.md](packaging/README.md). They are not yet signed or packaged as
-installers.
+How the downloads are built is described in [packaging/README.md](packaging/README.md).
 
 ## Privacy
 
@@ -83,7 +93,7 @@ key. See [Security](docs/security.md) for details.
 - [Desktop builds](packaging/README.md)
 - [Changelog](CHANGELOG.md)
 - [Security](docs/security.md), [security policy](SECURITY.md), and [contributing](CONTRIBUTING.md)
-- [Design notes](DESIGN.md)
+- [Design](DESIGN.md): architecture and design decisions
 - [License](LICENSE)
 
 ## Project status

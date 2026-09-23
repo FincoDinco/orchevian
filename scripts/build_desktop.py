@@ -15,6 +15,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import installers  # noqa: E402
 
 
 def main() -> int:
@@ -38,17 +41,22 @@ def main() -> int:
         bundle = dist / "Orchevian"
         executable = bundle / ("Orchevian.exe" if sys.platform == "win32" else "Orchevian")
     report_path = dist / "smoke-report.json"
-    report_path.unlink(missing_ok=True)
-    # Test outside the checkout so source files cannot conceal missing bundle resources.
-    with TemporaryDirectory(prefix="orchevian-bundle-check-") as temporary:
-        result = subprocess.run(
-            [str(executable), "--smoke-test", str(report_path)],
-            cwd=temporary, timeout=90, check=False,
-        )
-    report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
-    if result.returncode or not report.get("ok") or not report.get("frozen"):
-        raise RuntimeError(f"Desktop smoke check failed: {report or result.returncode}")
-    print(json.dumps(report, indent=2))
+
+    def smoke(program: Path) -> None:
+        report_path.unlink(missing_ok=True)
+        # Test outside the checkout so source files cannot conceal missing resources.
+        with TemporaryDirectory(prefix="orchevian-bundle-check-") as temporary:
+            result = subprocess.run(
+                [str(program), "--smoke-test", str(report_path)],
+                cwd=temporary, timeout=90, check=False,
+            )
+        report = (json.loads(report_path.read_text(encoding="utf-8"))
+                  if report_path.exists() else {})
+        if result.returncode or not report.get("ok") or not report.get("frozen"):
+            raise RuntimeError(f"Desktop smoke check failed: {report or result.returncode}")
+        print(json.dumps(report, indent=2))
+
+    smoke(executable)
 
     version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
     name = f"Orchevian-{version}-{sys.platform}-{platform.machine().lower()}"
@@ -65,6 +73,15 @@ def main() -> int:
         f"{digest}  {archive.name}\n", encoding="utf-8",
     )
     print(f"Built and verified {archive}")
+    # The download people install: a disk image, an installer, or an AppImage.
+    if sys.platform == "darwin":
+        download = installers.macos_dmg(bundle, dist, version, smoke)
+    elif sys.platform == "win32":
+        download = installers.windows_installer(bundle, dist, version)
+    else:
+        download = installers.linux_appimage(bundle, dist, version)
+    if download is not None:
+        print(f"Built {download}")
     return 0
 
 

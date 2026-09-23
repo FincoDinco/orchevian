@@ -101,4 +101,4 @@ without publishing releases.
 - `scripts/`: interface previews, desktop builds, and real-model checks.
 - `packaging/`: PyInstaller spec and desktop build notes.
 
-[DESIGN.md](../DESIGN.md) records design decisions and implementation history.
+[DESIGN.md](../DESIGN.md) describes the architecture and design decisions; the original rebuild plan is in [docs/history](history/redesign-plan.md).

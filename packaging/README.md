@@ -1,24 +1,17 @@
 # Desktop builds
 
-This first distribution slice creates a standalone **Orchevian** desktop bundle
-with Python, Qt, and the engine included. Users do not need Python or uv to run it.
-Ollama must be installed and running separately, with at least one model installed.
-Model weights, Ollama, MLX, and llama.cpp are not included. Existing GGUF/MLX files
-remain visible, but this build explains that their runtimes are unavailable.
+Orchevian ships as a normal desktop app with its own icon: a `.dmg` for macOS, an
+installer for Windows, and an AppImage for Linux. Python, Qt and the engine are
+included, so people don't need Python or a terminal.
 
-These are development preview packages. There is no installer, update mechanism,
-release signing, or macOS notarization yet. The workflow stores build artifacts;
-it does not publish a release. Build success is not a claim of real-model or
-clean-machine compatibility testing.
+Model runtimes are not bundled yet: the desktop app uses [Ollama](https://ollama.com),
+which people install separately. Existing GGUF or MLX model files stay visible, with an
+explanation that those runtimes need the source install.
 
 ## Build locally
 
-Build on the target operating system and architecture, using Python 3.13.
-On macOS, Apple's developer tools must be installed and their current license
-accepted. If `lipo` reports an unaccepted Xcode license, review it in Terminal with
-`sudo xcodebuild -license` before building again.
-Use a separate environment so optional inference packages cannot enter the bundle
-or get removed from the regular development environment:
+Build on the target operating system with Python 3.13, in a separate environment so
+development extras can't leak into the app:
 
 ```sh
 # macOS / Linux
@@ -33,99 +26,72 @@ uv sync --locked --no-default-groups --extra gui --group packaging
 .venv-package\Scripts\python.exe scripts\build_desktop.py
 ```
 
-The script runs PyInstaller, executes the bundled smoke check, then creates an
-archive with a SHA-256 sidecar in `dist/`. macOS produces `Orchevian.app` in a
-`.tar.gz`; Linux produces an `Orchevian/` folder in a `.tar.gz`; Windows produces an
-`Orchevian/` folder in a `.zip`. Extract the entire archive and keep its contents
-together. On macOS, the app can be moved to Applications; on Windows/Linux, launch
-the executable inside the extracted folder. Unsigned previews may be blocked by
-OS security controls; signing and clean-machine launch validation remain release
-requirements.
+The script:
 
-The **Desktop packages** GitHub Actions workflow runs on relevant pull requests
-or manually, building separately on Ubuntu 22.04, Windows, and macOS. Each artifact
-name identifies its runner; the archive filename identifies its actual architecture.
-Linux compatibility starts with the build host's system libraries, and macOS
-architecture follows the runner. Additional architectures need their own builds.
+1. writes `build/THIRD_PARTY_NOTICES.txt` from the packaging environment;
+2. runs PyInstaller with `packaging/orchevian.spec` (icon, version and app metadata);
+3. runs the bundled app's smoke check outside the checkout, with temporary data and a
+   fake model (database, model worker, local API with its key, document readers, images
+   and OCR plumbing, web reading, file creation, Markdown, app icon and secret storage,
+   and the main window);
+4. writes a portable archive and the platform download into `dist/`, each with a
+   `.sha256` checksum:
 
-## Verification
+| Platform | Download | Notes |
+| --- | --- | --- |
+| macOS | `Orchevian-<version>-macos-arm64.dmg` | Drag-to-Applications disk image. The app inside the mounted image is smoke-checked again. |
+| Windows | `Orchevian-<version>-windows-x64-setup.exe` | Needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`iscc`). Installs per user, no administrator prompt; Start menu and optional desktop shortcut; uninstaller. |
+| Linux | `Orchevian-<version>-linux-x64.AppImage` | Needs [appimagetool](https://github.com/AppImage/appimagetool) (`APPIMAGETOOL` or on `PATH`). |
 
-`scripts/build_desktop.py` runs the actual executable outside the checkout with
-`--smoke-test REPORT_JSON`, enforces a 90-second timeout, and requires a successful
-report identifying a frozen executable before creating an archive. The check uses
-temporary config, database, vault, logs, model directory, and Qt settings. It uses
-a fake model and an offscreen Qt platform, with no model downloads or user database
-access. It checks:
+On macOS, Apple's developer tools must be installed and their license accepted
+(`sudo xcodebuild -license`).
 
-- Database migration files and SQL schema, plus a template write.
-- Isolated Word, Excel, CSV, and text readers, original storage, and unreadable-PDF detection.
-- Picture decoding, PDF rendering, and image-bearing generation through a spawned fake vision backend.
-- Shared project file retrieval and preservation of reply sources after project deletion.
-- Spawned web retrieval, HTML extraction, search-off behavior and retained sources using an offline fixture.
-- Isolated DOCX/XLSX/PPTX/PDF-form/YAML creation, rendered previews, version storage and ZIP export.
-- A spawned model worker, including load, response generation, and unload.
-- A real loopback API listener with JSON and streaming completions.
-- Markdown extension imports and SVG asset rendering.
-- Main workspace rendering and thread shutdown.
+## Icons
 
-The JSON report remains at `dist/smoke-report.json`. Before distributing a release,
-also test the native window and Ollama chat on a clean machine, as well as upgrade
-and rollback with a copied existing library. Quit any other Orchevian/legacy app
-before opening the normal desktop app; it retains the existing data path and
-startup migrations. Do not delete the existing database.
+`scripts/make_icons.py` draws the icon and writes every format to `packaging/icons/`:
+`.icns` (macOS), `.ico` (Windows) and PNGs (Linux, and the window icon). Edit the script
+and rerun it to change the icon; the generated files are committed.
 
-September 22, 2026 verification: the macOS arm64 preview was rebuilt with the
-September 21 artifact-revision fixes and passed all ten frozen smoke checks.
-A separate check verified the archive checksum, extracted the archive into a
-temporary path containing spaces, and reran all ten checks with `PYTHONPATH`,
-`PYTHONHOME`, and `VIRTUAL_ENV` removed. Executable permissions survived extraction.
-That report is at `dist/archive-smoke-report.json`. Both runs used temporary data
-and fake inference on the development Mac; clean-machine launches, native Office
-layout/recalculation, and packaged real-model inference remain unverified.
-A later September 22 rebuild with the model-matrix and web-connection fixes passed
-the same built and extracted-archive checks.
+## Publishing a release
+
+1. Set the version in `pyproject.toml`, `src/llm_manager_app/__init__.py`, and
+   `src/llm_engine/__init__.py` (a test checks they match).
+2. Rename the changelog's `[Unreleased]` section to the new version.
+3. Commit, then tag and push: `git tag v1.0.0 && git push origin v1.0.0`.
+
+`.github/workflows/release.yml` checks that the tag matches the version, builds on
+macOS, Windows and Linux (installing Inno Setup and a checksum-pinned appimagetool),
+and publishes a GitHub Release with the downloads, checksums, and install notes from
+`scripts/release_notes.py`. The **Desktop packages** workflow builds the same files for
+pull requests without publishing.
 
 ## Licenses in the build
 
-Each build includes `LICENSE` (Orchevian's GPL-3.0) and `THIRD_PARTY_NOTICES.txt`, which
-`scripts/third_party_notices.py` generates from the packaging environment before PyInstaller
-runs. It lists Python, every bundled package with its license texts, and Qt/PySide6 under
-LGPL-3.0 (text in `packaging/licenses/`) with links to their source code. Qt stays as
-separate shared libraries so users can replace it, as the LGPL requires. Both files are
-viewable in **Help → About Orchevian**.
+Each build includes `LICENSE` (Orchevian's GPL-3.0) and `THIRD_PARTY_NOTICES.txt`,
+generated by `scripts/third_party_notices.py`. It lists Python, every bundled package with
+its license texts, and Qt/PySide6 under LGPL-3.0 (text in `packaging/licenses/`) with links
+to their source code. Qt stays as separate shared libraries so people can replace it, as
+the LGPL requires. Both files are viewable in **Help → About Orchevian**.
 
 ## Packaging decisions
 
-The [PyInstaller spec](https://pyinstaller.org/en/stable/spec-files.html) explicitly
-includes SQL, dynamically loaded migration source files, SVGs, and the modules
-loaded dynamically by Uvicorn and Markdown, PowerPoint templates, and ReportLab fonts.
-Optional native inference libraries
-are excluded even if present on a developer's machine. Use the clean environment
-above to keep other accidental dependencies out of the package.
+- The spec lists data PyInstaller can't discover: SQL schema and migrations (loaded by
+  path), icons and SVGs, Markdown and Uvicorn modules loaded dynamically, PowerPoint
+  templates, ReportLab fonts and PDFium.
+- Optional model runtimes (MLX, llama.cpp) are excluded even if installed on the build
+  machine.
+- The entry point calls `multiprocessing.freeze_support()` before importing Qt, as
+  [PyInstaller requires](https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html#multi-processing)
+  for the app's worker processes.
+- Directory bundles avoid unpacking the runtime on every launch.
 
-The entry point calls `multiprocessing.freeze_support()` before importing Qt,
-following [PyInstaller's multiprocessing guidance](https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html#multi-processing).
-This is required for the disposable model workers in frozen builds. Directory
-bundles avoid extracting the runtime on each launch, and POSIX tar archives
-preserve bundle symlinks and executable permissions.
+## Not done yet
 
-Chat document uploads, text reading, and shared project files are implemented in the working tree.
-Picture/scanned-document reading now includes Pillow/PDFium previews and Ollama vision.
-Local English OCR uses a separately installed Tesseract shared library and language data;
-these are not bundled yet. The smoke check verifies rendering and image transport with
-a fake model, not real-model interpretation. See the [user guide](../docs/user-guide.md#pictures-and-scanned-pdfs) for OCR setup.
-Document creator tools include additional packaged runtime dependencies and a
-generator smoke check. Two complete creation/revision fixtures passed with the
-installed MLX model on September 21 in the development environment. A live sourced
-answer fixture passed on September 18. Broader model quality, native Office layout,
-spreadsheet recalculation, and clean-machine validation remain outstanding. Before
-release signing and notarization, complete those checks and broader web-search
-acceptance. The prompt toggle and search services are implemented; the
-offline smoke fixture does not establish provider availability. Web search uses
-the standard library, and migration 007 is included by the migration-file glob.
-See [the feature milestones](../DESIGN.md#next-feature-milestones--documents-and-project-workspace).
-Keep this preview build working as those features add dependencies and resources.
-
-Distribution work follows those milestones: native runtime bundles by platform,
-release signing and notarization, installer formats, icons/version metadata, and
-clean-machine testing.
+- **Code signing.** Builds are unsigned, so macOS Gatekeeper and Windows SmartScreen
+  warn on first launch; the release notes explain how to open the app. Signing needs an
+  Apple Developer account (and notarization) and a Windows code-signing certificate.
+- **Bundled runtimes.** Shipping MLX (Apple Silicon) and llama.cpp inside the app would
+  remove the need for Ollama.
+- **Intel Macs.** Builds follow the build machine's architecture; an Intel (x64) macOS
+  build needs its own runner.
+- **Clean-machine testing** of each download before a public release.

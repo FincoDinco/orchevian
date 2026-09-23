@@ -246,6 +246,23 @@ def _exercise(root: Path, checks: list[str]) -> None:
                 raise RuntimeError("Bundled SVG asset could not be rendered")
             checks.append("Markdown extensions and SVG assets")
 
+            if QPixmap(str(Path(__file__).parent / "assets" / "orchevian.png")).isNull():
+                raise RuntimeError("Bundled app icon could not be loaded")
+            from llm_manager_app.secret_store import _vault
+
+            vault = _vault()
+            # A real bundle must carry a vault backend; tests force the null one.
+            frozen = getattr(sys, "frozen", False)
+            if vault is None and frozen and sys.platform in {"darwin", "win32"}:
+                raise RuntimeError("No system password vault backend was bundled")
+            backend = type(vault.get_keyring()).__module__ if vault else "owner-only file"
+            # Checked without writing; the workspace below must not touch the real vault.
+            if vault is not None:
+                from keyring.backends import null
+
+                vault.set_keyring(null.Keyring())
+            checks.append(f"app icon and secret storage ({backend})")
+
             settings = QSettings(str(root / "gui.ini"), QSettings.Format.IniFormat)
             window = MainWindow(registry=registry, library=library, settings=settings)
             try:
