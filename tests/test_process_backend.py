@@ -280,7 +280,12 @@ def test_ollama_stop_closes_request_before_headers_and_unloads_model(phase):
             ):
                 entered.set()
                 self.connection.settimeout(5)
-                if self.connection.recv(1) == b"":
+                try:
+                    closed = self.connection.recv(1) == b""
+                except ConnectionResetError:
+                    # Windows resets the socket when the worker process is ended.
+                    closed = True
+                if closed:
                     disconnected.set()
             else:
                 self.reply({"done": True})

@@ -41,8 +41,9 @@ def test_default_paths_ignore_appdata(monkeypatch: pytest.MonkeyPatch, tmp_path)
     monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\seth\AppData\Local")
     db = default_db_path()
     cfg = default_config_path()
-    assert "AppData" not in db.parts
-    assert "AppData" not in cfg.parts
+    # Only the part below home matters: Windows keeps temporary folders in AppData.
+    assert "AppData" not in db.relative_to(tmp_path).parts
+    assert "AppData" not in cfg.relative_to(tmp_path).parts
     assert cfg == tmp_path / ".local" / "share" / "orchevian" / "config.json"
 
 
