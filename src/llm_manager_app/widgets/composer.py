@@ -130,10 +130,10 @@ class Composer(QWidget):
         self.web_search.setCheckable(True)
         self.web_search.setAccessibleName("Web search for this reply")
         self.web_search.setToolTip(
-            "Off: no web requests. On: send up to 500 characters of this message to "
-            "Bing and read public result pages. "
-            "Files and saved conversations are not sent. "
-            "Also applies when regenerating."
+            "Off: no web requests. On: send up to 500 characters of this question to a "
+            "search service (Exa's free search, your own key's service, or Bing as a "
+            "backup) and read the results. Files and saved conversations are not sent. "
+            "Also applies to Retry."
         )
         self.web_search.toggled.connect(lambda checked: self.web_search.setText(
             "Web search · On" if checked else "Web search"

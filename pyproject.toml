@@ -1,7 +1,7 @@
 [project]
 name = "orchevian"
 version = "0.1.0"
-description = "Local-first AI workspace for Orchevian"
+description = "A private, local-first AI workspace: chat with local models, your files, and the web, create documents, and keep a personal knowledge base."
 readme = "README.md"
 authors = [
     { name = "Seth Hardin", email = "personal@sethhardin.com" },

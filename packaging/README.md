@@ -104,7 +104,7 @@ Chat document uploads, text reading, and shared project files are implemented in
 Picture/scanned-document reading now includes Pillow/PDFium previews and Ollama vision.
 Local English OCR uses a separately installed Tesseract shared library and language data;
 these are not bundled yet. The smoke check verifies rendering and image transport with
-a fake model, not real-model interpretation. See the README for OCR setup.
+a fake model, not real-model interpretation. See the [user guide](../docs/user-guide.md#pictures-and-scanned-pdfs) for OCR setup.
 Document creator tools include additional packaged runtime dependencies and a
 generator smoke check. Two complete creation/revision fixtures passed with the
 installed MLX model on September 21 in the development environment. A live sourced
