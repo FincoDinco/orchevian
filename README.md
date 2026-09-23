@@ -79,6 +79,7 @@ The local API listens only on `127.0.0.1` and is off until you enable it.
 - [Desktop builds](packaging/README.md)
 - [Changelog](CHANGELOG.md)
 - [Design notes](DESIGN.md)
+- [License](LICENSE)
 
 ## Project status
 
@@ -90,3 +91,12 @@ Orchevian is approaching its 1.0 release. Remaining work:
 
 Orchevian was previously called LLM Manager. Existing chats, models, projects, and
 notes carry over automatically.
+
+## License
+
+Copyright © 2026 Seth Hardin.
+
+Orchevian is free software, released under the
+[GNU General Public License v3.0 or later](LICENSE). You can use, study, share, and
+improve it. If you distribute a modified version, it must also be free and open
+source under the same license, with its source code available.

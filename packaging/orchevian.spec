@@ -19,6 +19,8 @@ a = Analysis(
         # The migration loader executes these files by path, outside the module archive.
         (str(root / "src/llm_engine/store/migrations/*.py"), "llm_engine/store/migrations"),
         (str(root / "src/llm_manager_app/assets/*.svg"), "llm_manager_app/assets"),
+        # GPL-3.0: distributed copies carry the license text.
+        (str(root / "LICENSE"), "."),
     ] + collect_data_files("markdown") + collect_data_files("pptx")
       # python-pptx resolves notes templates through oxml/../templates. The oxml
       # directory must exist on disk even though its modules are in the archive.
