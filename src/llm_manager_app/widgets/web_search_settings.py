@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import QSettings, Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFrame,
@@ -18,17 +18,29 @@ from PySide6.QtWidgets import (
 )
 
 from llm_engine.services.web_retrieval import SEARCH_SERVICES, check_search_key
+from llm_manager_app.secret_store import SecretStore
 
 
-def _setting(service_id: str) -> str:
+def _legacy_setting(service_id: str) -> str:
+    # Earlier versions kept keys as plain settings; they move to the secret store.
     return f"web_search/{service_id}_key"
 
 
-def load_search_keys(settings: QSettings) -> list[tuple[str, str]]:
+def _secret(service_id: str) -> str:
+    return f"web_search/{service_id}"
+
+
+def _store(source) -> SecretStore:
+    return source if isinstance(source, SecretStore) else SecretStore(source)
+
+
+def load_search_keys(source) -> list[tuple[str, str]]:
     """Saved keys in the order they are tried."""
+    store = _store(source)
     keys = []
     for service in SEARCH_SERVICES:
-        key = str(settings.value(_setting(service.id), "") or "").strip()
+        store.adopt(_legacy_setting(service.id), _secret(service.id))
+        key = store.get(_secret(service.id)).strip()
         if key:
             keys.append((service.id, key))
     return keys
@@ -46,7 +58,8 @@ PRIVACY = (
 )
 WHAT_IS_A_KEY = (
     "<b>What is an API key?</b> It works like a password that lets Orchevian search with your "
-    "free account on that service. It stays on this computer and is only sent to that service."
+    "free account on that service. It stays on this computer, private to your account, and is "
+    "only sent to that service."
 )
 STEPS = (
     "<b>How to add one</b><br>"
@@ -62,10 +75,9 @@ ORDER_NOTE = (
 
 
 class _ServiceCard(QFrame):
-    def __init__(self, service, settings: QSettings, recommended: bool, parent=None):
+    def __init__(self, service, store: SecretStore, recommended: bool, parent=None):
         super().__init__(parent)
         self.service = service
-        self._settings = settings
         self.setObjectName("searchServiceCard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
@@ -96,7 +108,7 @@ class _ServiceCard(QFrame):
         self.key.setPlaceholderText("Paste your key here")
         self.key.setEchoMode(QLineEdit.EchoMode.Password)
         self.key.setAccessibleName(f"{service.name} API key")
-        self.key.setText(str(settings.value(_setting(service.id), "") or ""))
+        self.key.setText(store.get(_secret(service.id)))
         self.test = QPushButton("Test", self)
         self.test.setObjectName(f"{service.id}TestButton")
         self.remove = QPushButton("Remove", self)
@@ -146,9 +158,10 @@ class WebSearchSettings(QWidget):
     keys_changed = Signal(list)
     _checked = Signal(str, str)
 
-    def __init__(self, settings: QSettings, parent=None, *, check=check_search_key):
+    def __init__(self, settings, parent=None, *, check=check_search_key):
         super().__init__(parent)
-        self._settings = settings
+        self._store = _store(settings)
+        load_search_keys(self._store)  # Moves keys saved by earlier versions.
         self._check = check
         self._checked.connect(self._on_checked)
 
@@ -163,7 +176,7 @@ class WebSearchSettings(QWidget):
             layout.addWidget(label)
         self.cards: dict[str, _ServiceCard] = {}
         for index, service in enumerate(SEARCH_SERVICES):
-            card = _ServiceCard(service, settings, recommended=index == 0, parent=body)
+            card = _ServiceCard(service, self._store, recommended=index == 0, parent=body)
             card.key.textEdited.connect(lambda _text, c=card: self._save(c))
             card.test.clicked.connect(lambda _checked=False, c=card: self._start_check(c))
             card.remove.clicked.connect(lambda _checked=False, c=card: self._remove(c))
@@ -184,12 +197,9 @@ class WebSearchSettings(QWidget):
         outer.addWidget(scroll)
 
     def _save(self, card: _ServiceCard) -> None:
-        if card.value():
-            self._settings.setValue(_setting(card.service.id), card.value())
-        else:
-            self._settings.remove(_setting(card.service.id))
+        self._store.set(_secret(card.service.id), card.value())
         card.show_saved()
-        self.keys_changed.emit(load_search_keys(self._settings))
+        self.keys_changed.emit(load_search_keys(self._store))
 
     def _remove(self, card: _ServiceCard) -> None:
         card.key.clear()

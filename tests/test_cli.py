@@ -76,18 +76,22 @@ def test_serve_real_process_stops_on_termination_without_opening_db(paths, tmp_p
     port = free_port()
     process = subprocess.Popen(
         [sys.executable, "-m", "llm_engine", "serve", "--port", str(port), *paths],
-        env=os.environ.copy(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=os.environ | {"ORCHEVIAN_API_KEY": "ov-test-key"},
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
+    key = {"Authorization": "Bearer ov-test-key"}
     try:
         def ready():
             if process.poll() is not None:
                 pytest.fail(process.communicate()[1])
             try:
-                return httpx.get(f"http://127.0.0.1:{port}/v1/models", timeout=0.3).is_success
+                return httpx.get(f"http://127.0.0.1:{port}/v1/models", timeout=0.3,
+                                 headers=key).is_success
             except httpx.TransportError:
                 return False
         wait_for(ready)
-        result = httpx.post(f"http://127.0.0.1:{port}/v1/chat/completions", json=BODY)
+        result = httpx.post(f"http://127.0.0.1:{port}/v1/chat/completions", json=BODY,
+                            headers=key)
         assert result.json()["choices"][0]["message"]["content"] == "Hello world"
         assert not (tmp_path / "data.db").exists()
         process.terminate()

@@ -30,13 +30,14 @@ from llm_engine.domain.models import ModelRef
 from llm_engine.services.catalog import CatalogService
 from llm_engine.services.chat import ChatService
 from llm_engine.services.memory import CaptureResult
-from llm_engine.services.openai_api import ApiServerService
+from llm_engine.services.openai_api import ApiServerService, new_api_key
 from llm_engine.services.session import ModelSession
 from llm_engine.store.library import LibraryService
 from llm_engine.store.vault import MemoryVault
 from llm_manager_app.icons import icon
 from llm_manager_app.model_names import ModelNames
 from llm_manager_app.model_preferences import default_model
+from llm_manager_app.secret_store import API_KEY_SECRET, SecretStore
 from llm_manager_app.tokens import apply_studio
 from llm_manager_app.widgets.chat_view import ChatView
 from llm_manager_app.widgets.conversation_list import ConversationList, ConversationStore
@@ -174,7 +175,13 @@ class MainWindow(QMainWindow):
             self._worker_thread, self._worker = start_chat_worker(
                 self._chat_service, self, session=self._session
             )
-            self._api = ApiServerService(self._chat_service, self._catalog_service)
+            # The key is created once and kept with Orchevian's other secrets.
+            secrets = SecretStore(self._settings)
+            api_key = secrets.get(API_KEY_SECRET) or new_api_key()
+            secrets.set(API_KEY_SECRET, api_key)
+            self._api = ApiServerService(
+                self._chat_service, self._catalog_service, api_key=api_key
+            )
 
         shell = QWidget(self)
         shell.setObjectName("shell")

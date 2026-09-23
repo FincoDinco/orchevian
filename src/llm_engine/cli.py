@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 import threading
@@ -79,10 +80,17 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # API inference is stateless; an in-memory library keeps serve off the user's DB.
     with SqliteStore(":memory:") as store:
         chat = ChatService(LibraryService(store), session)
-        api = ApiServerService(chat, CatalogService(registry, session), port=cfg.api_port)
+        supplied = os.environ.get("ORCHEVIAN_API_KEY", "").strip()
+        api = ApiServerService(chat, CatalogService(registry, session), port=cfg.api_port,
+                               api_key=supplied or None)
         try:
             status = api.start(port=args.port)
             print(f"Local API: {status['url']} (Ctrl+C to stop)", flush=True)
+            if supplied:
+                print("API key: from ORCHEVIAN_API_KEY", flush=True)
+            else:
+                print(f"API key: {api.api_key}  (send as 'Authorization: Bearer <key>')",
+                      flush=True)
             while api.status()["running"] and not stopped.wait(0.2):
                 pass
         except KeyboardInterrupt:
@@ -196,6 +204,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         vars(args).setdefault(key, default)
     try:
         cfg = config.load(args.config, args.db)
+        if cfg.db_path.parent == config.app_data_dir():
+            # Chats and notes stay private to this account, including older installs.
+            config.secure_app_data()
         setup_logging(verbose=args.verbose, log_path=cfg.db_path.parent / "logs" / "engine.log")
         return {
             "health": _cmd_health,

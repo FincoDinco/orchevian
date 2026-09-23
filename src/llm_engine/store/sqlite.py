@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 import sqlite3
 import threading
@@ -9,6 +10,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+
+from llm_engine.config import make_private
 
 MIGRATION_FILES = (
     "001_baseline.py", "002_indexes.py", "003_documents.py", "004_project_documents.py",
@@ -51,6 +54,7 @@ def _schema_migrations_exists(path: Path) -> bool:
 def _backup_pre_engine(path: Path) -> Path:
     backup = path.parent / f"{path.name}{BACKUP_SUFFIX}"
     shutil.copy2(path, backup)
+    make_private(backup)
     return backup
 
 
@@ -64,6 +68,11 @@ class SqliteStore:
         self._closed = False
         if self.path.exists() and not _schema_migrations_exists(self.path):
             _backup_pre_engine(self.path)
+        if str(path) != ":memory:":
+            if not self.path.exists():
+                # Create owner-only before SQLite writes; its WAL files inherit the mode.
+                os.close(os.open(self.path, os.O_CREAT | os.O_WRONLY, 0o600))
+            make_private(self.path)
         self._conn = sqlite3.connect(
             str(self.path),
             isolation_level=None,

@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from PySide6.QtCore import QEvent, QObject, QRect, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
+    QCursor,
     QDesktopServices,
     QIcon,
     QPainter,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTextBrowser,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -74,12 +76,38 @@ def _flatten_pre(rendered: str) -> str:
     return _PRE.sub(replace, rendered)
 
 
+_SAFE_LINK = re.compile(r"^(?:https?:|mailto:|#)", re.I)
+
+
+def _safe_markdown():
+    """Markdown for untrusted model text: no raw HTML, no images, web/mail links only.
+
+    Replies can be shaped by web pages or documents. Raw HTML could imitate app
+    content (a fake "You" turn or warning), so it is shown as text instead.
+    """
+    import markdown
+    from markdown.treeprocessors import Treeprocessor
+
+    class _Links(Treeprocessor):
+        def run(self, root):
+            for link in root.iter("a"):
+                if not _SAFE_LINK.match(link.get("href", "").strip()):
+                    link.attrib.pop("href", None)
+
+    md = markdown.Markdown(extensions=["fenced_code", "nl2br", "sane_lists"])
+    md.preprocessors.deregister("html_block")
+    for name in ("html", "image_link", "image_reference", "short_image_ref"):
+        md.inlinePatterns.deregister(name)
+    md.treeprocessors.register(_Links(md), "safe_links", 0)
+    return md
+
+
 def _markdown(text: str) -> str:
     try:
-        import markdown
+        md = _safe_markdown()
     except ImportError:
         return "<p>" + html.escape(text).replace("\n", "<br>\n") + "</p>"
-    return _flatten_pre(markdown.markdown(text, extensions=["fenced_code", "nl2br", "sane_lists"]))
+    return _flatten_pre(md.convert(text))
 
 
 def close_open_markup(text: str) -> str:
@@ -161,6 +189,8 @@ class Transcript(QWidget):
         self._browser.setOpenExternalLinks(True)
         self._browser.setOpenLinks(False)
         self._browser.anchorClicked.connect(self._open_link)
+        # Show where a link really goes before it is clicked, as browsers do.
+        self._browser.highlighted.connect(self._show_link_target)
         self._browser.setFrameShape(QFrame.Shape.NoFrame)
         self._browser.document().setDocumentMargin(12)
 
@@ -437,6 +467,14 @@ class Transcript(QWidget):
     def _toggle_thinking(self, expanded: bool) -> None:
         self._thought_toggle.setIcon(icon("chevron-down" if expanded else "chevron-right"))
         self._sync_thinking()
+
+    def _show_link_target(self, url) -> None:
+        target = url.toString() if url.scheme() in {"http", "https", "mailto"} else ""
+        self._browser.setToolTip(target)
+        if target:
+            QToolTip.showText(QCursor.pos(), target, self._browser)
+        else:
+            QToolTip.hideText()
 
     def _open_link(self, url) -> None:
         fragment = url.fragment()

@@ -5,7 +5,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from llm_engine.config import default_log_path
+from llm_engine.config import default_log_path, make_private
 
 _LOGGER_NAME = "llm_engine"
 _FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -30,7 +30,10 @@ def setup_logging(*, verbose: bool = False, log_path: Path | None = None) -> log
 
     path = log_path if log_path is not None else default_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    if log_path is None:
+        make_private(path.parent, directory=True)
     file_handler = RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+    make_private(path)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     return logger

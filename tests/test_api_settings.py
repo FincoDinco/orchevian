@@ -18,6 +18,7 @@ def test_settings_start_stop_port_persistence_and_errors(tmp_path):
     class Api:
         running = False
         fail = False
+        api_key = "ov-original"
 
         def status(self):
             return {"running": self.running, "port": cfg["api_port"], "recent_requests": []}
@@ -81,3 +82,36 @@ def test_main_window_owns_shared_api_and_closes_listener(tmp_path):
     finally:
         window.close()
         store.close()
+
+
+def test_api_key_is_shown_copied_and_regenerated(tmp_path):
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton
+
+    from llm_manager_app.secret_store import API_KEY_SECRET, SecretStore
+    from llm_manager_app.widgets.settings import SettingsDialog
+
+    _qapp()
+
+    class Api:
+        api_key = "ov-original"
+
+        def status(self):
+            return {"running": False, "port": 8123, "recent_requests": []}
+
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    api = Api()
+    dialog = SettingsDialog(settings=settings, config_get=lambda: {"api_port": 8123},
+                            config_set=lambda **_: None, api=api)
+    try:
+        field = dialog.findChild(QLineEdit, "apiKey")
+        assert field.text() == "ov-original"
+        assert field.echoMode() == QLineEdit.EchoMode.Password
+        dialog.findChild(QPushButton, "copyApiKey").click()
+        assert QApplication.clipboard().text() == "ov-original"
+        dialog.findChild(QPushButton, "regenerateApiKey").click()
+        assert api.api_key.startswith("ov-") and api.api_key != "ov-original"
+        assert SecretStore(settings, vault=None).get(API_KEY_SECRET) == api.api_key
+        assert field.text() == api.api_key
+    finally:
+        dialog.close()

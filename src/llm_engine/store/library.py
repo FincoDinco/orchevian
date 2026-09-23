@@ -269,7 +269,15 @@ class LibraryService:
             if cur.rowcount == 0:
                 raise EngineError("not_found", f"project {id} not found")
 
+    # Column names are interpolated into SQL, so only these may be updated.
+    _CONVERSATION_COLUMNS = frozenset(
+        {"title", "project_id", "system_prompt", "model_name", "backend"}
+    )
+
     def _update_conversation(self, id: int, **fields: Any) -> None:
+        unknown = set(fields) - self._CONVERSATION_COLUMNS
+        if unknown:
+            raise EngineError("config_invalid", f"unknown fields: {sorted(unknown)}")
         assignments: dict[str, object] = dict(fields)
         assignments["updated_at"] = _now()
         sets = ", ".join(f"{column} = ?" for column in assignments)

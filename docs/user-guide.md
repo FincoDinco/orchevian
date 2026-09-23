@@ -270,22 +270,26 @@ Terminal chat streams responses into the terminal and saves user and assistant t
 
 ## Local API
 
-Open **Settings → API → Enable local API** to connect a local client to the GUI's model session. The tab provides a port setting, read-only base URL, **Copy URL**, terminal examples, and the last 50 request summaries. Summaries contain the method, path, HTTP status, and time to response headers; they stay in memory and omit message content. The API starts disabled on each app launch. Disabling it or quitting the app stops its requests and closes the listener.
+Open **Settings → API → Enable local API** to connect a local client to the GUI's model session. The tab provides a port setting, read-only base URL, **Copy URL**, the **API key** with **Copy Key** and **Regenerate**, terminal examples, and the last 50 request summaries. Summaries contain the method, path, HTTP status, and time to response headers; they stay in memory and omit message content. The API starts disabled on each app launch. Disabling it or quitting the app stops its requests and closes the listener.
 
 The API binds only to `127.0.0.1` and exposes:
 
 - `GET /v1/models`: available model IDs in `backend/name` form.
 - `POST /v1/chat/completions`: text chat, with regular JSON or streaming server-sent events.
 
+Every request must include the API key, the same way OpenAI clients send theirs. In most
+apps, paste it into the "API key" field.
+
 ```bash
-curl http://127.0.0.1:8080/v1/models
+curl http://127.0.0.1:8080/v1/models -H 'Authorization: Bearer YOUR_API_KEY'
 curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"model":"ollama/qwen3:8b","messages":[{"role":"user","content":"Hello"}],"stream":true}'
 ```
 
-Replace the model with an ID from `/v1/models`. Supported request fields are `model`, `messages` (text `system`, `user`, or `assistant` messages), `stream`, `temperature`, `top_p`, `max_tokens`, and `n` (1 only). Unsupported fields, tools, and multimodal content return an error. Token usage is omitted because the backends do not consistently report token counts. Streaming responses use assistant/content deltas and a final `[DONE]`; errors after streaming starts appear as an error event instead of a successful finish.
+Replace the model with an ID from `/v1/models`. Supported request fields are `model`, `messages` (text `system`, `user`, or `assistant` messages), `stream`, `temperature`, `top_p`, `max_tokens`, and `n` (1 only). Unsupported fields, tools, and multimodal content return an error. Request bodies are limited to 4 MB and `max_tokens` to 32,768. Token usage is omitted because the backends do not consistently report token counts. Streaming responses use assistant/content deltas and a final `[DONE]`; errors after streaming starts appear as an error event instead of a successful finish.
 
 An idle session automatically loads the requested model. API requests share the GUI's one-operation limit with regular/private chat, model management, and memory capture; a competing request returns HTTP 429. Disconnecting a client or stopping the API cancels that API request. It does not stop an unrelated GUI request. API prompts and replies never enter saved conversations or Second Brain, and API requests receive only the messages supplied by the client.
 
-`orchevian-engine serve` runs the same API with its own model session and an in-memory library; it does not open or migrate your conversation database. Use the GUI's API when you want clients to share the GUI's loaded model. Only one server can use a given port. The API has no authentication, is intended for trusted local clients, and rejects browser-origin requests; it does not enable CORS.
+`orchevian-engine serve` runs the same API with its own model session and an in-memory library; it does not open or migrate your conversation database. Use the GUI's API when you want clients to share the GUI's loaded model. Only one server can use a given port. It prints a new API key at startup, or uses the `ORCHEVIAN_API_KEY` environment variable when set. Both servers require the key, accept only `127.0.0.1`/`localhost` host names (blocking DNS-rebinding attacks), and reject browser-origin requests; neither enables CORS.

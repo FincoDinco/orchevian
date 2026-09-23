@@ -82,6 +82,7 @@ def _exercise(root: Path, checks: list[str]) -> None:
             try:
                 api.start(port=port)
                 with httpx.Client(base_url=f"http://127.0.0.1:{port}", trust_env=False,
+                                  headers={"Authorization": f"Bearer {api.api_key}"},
                                   timeout=25) as client:
                     response = client.get("/v1/models")
                     response.raise_for_status()

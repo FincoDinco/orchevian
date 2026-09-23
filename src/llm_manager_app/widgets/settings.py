@@ -31,7 +31,9 @@ from PySide6.QtWidgets import (
 )
 
 from llm_engine import config
+from llm_engine.services.openai_api import new_api_key
 from llm_manager_app.model_preferences import default_model, save_default_model
+from llm_manager_app.secret_store import API_KEY_SECRET, SecretStore
 from llm_manager_app.widgets.web_search_settings import WebSearchSettings
 
 ORG_NAME = "Orchevian"
@@ -241,6 +243,18 @@ class SettingsDialog(QWidget):
         self._api_url.setReadOnly(True)
         copy = QPushButton("Copy URL", page)
         copy.clicked.connect(lambda: QApplication.clipboard().setText(self._api_url.text()))
+        self._api_key = QLineEdit(page)
+        self._api_key.setObjectName("apiKey")
+        self._api_key.setReadOnly(True)
+        self._api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._api_key.setText(self._api.api_key)
+        copy_key = QPushButton("Copy Key", page)
+        copy_key.setObjectName("copyApiKey")
+        copy_key.clicked.connect(lambda: QApplication.clipboard().setText(self._api.api_key))
+        regenerate = QPushButton("Regenerate", page)
+        regenerate.setObjectName("regenerateApiKey")
+        regenerate.setToolTip("Make a new key. Clients using the old key stop working.")
+        regenerate.clicked.connect(self._regenerate_api_key)
         self._api_status = QLabel("Stopped", page)
         self._api_status.setObjectName("apiStatus")
         self._api_status.setWordWrap(True)
@@ -248,7 +262,8 @@ class SettingsDialog(QWidget):
             "Connect local tools using an OpenAI-compatible API. It shares the model with "
             "chat and Second Brain, so only one request can run at a time. "
             "API messages are not saved and do not use your notes. "
-            "The API is available only on this computer and starts disabled each launch.", page,
+            "The API is available only on this computer and starts disabled each launch. "
+            "Clients must send the API key (most apps have an API key field for it).", page,
         )
         hint.setWordWrap(True)
         self._api_example = QPlainTextEdit(page)
@@ -268,6 +283,11 @@ class SettingsDialog(QWidget):
         row.addWidget(self._api_url)
         row.addWidget(copy)
         form.addRow("Base URL", row)
+        key_row = QHBoxLayout()
+        key_row.addWidget(self._api_key)
+        key_row.addWidget(copy_key)
+        key_row.addWidget(regenerate)
+        form.addRow("API key", key_row)
         form.addRow("Status", self._api_status)
         layout.addLayout(form)
         layout.addWidget(QLabel("Try it in a terminal", page))
@@ -295,8 +315,9 @@ class SettingsDialog(QWidget):
         port = status["port"] if running else self._api_port.value()
         url = f"http://127.0.0.1:{port}/v1"
         self._api_url.setText(url)
-        example = (f"curl {url}/models\n\n"
-                   f"curl {url}/chat/completions -H 'Content-Type: application/json' "
+        auth = "-H 'Authorization: Bearer YOUR_API_KEY'"
+        example = (f"curl {url}/models {auth}\n\n"
+                   f"curl {url}/chat/completions {auth} -H 'Content-Type: application/json' "
                    "-d '{\"model\":\"ollama/MODEL_NAME\",\"messages\":["
                    "{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}'")
         if self._api_example.toPlainText() != example:
@@ -307,6 +328,12 @@ class SettingsDialog(QWidget):
         )
         if self._api_recent.toPlainText() != recent:
             self._api_recent.setPlainText(recent)
+
+    def _regenerate_api_key(self) -> None:
+        key = new_api_key()
+        SecretStore(self._settings).set(API_KEY_SECRET, key)
+        self._api.api_key = key
+        self._api_key.setText(key)
 
     def _toggle_api(self, enabled: bool) -> None:
         if self._api_task is not None:

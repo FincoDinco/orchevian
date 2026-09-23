@@ -28,6 +28,34 @@ def app_data_dir() -> Path:
     return share / "orchevian"
 
 
+def make_private(path: Path, *, directory: bool = False) -> None:
+    """Owner-only access (0700/0600) on macOS and Linux.
+
+    Chats, notes and logs must not be readable by other accounts on the same
+    computer. Windows user profiles are already private to their owner. Only
+    paths this user owns are changed.
+    """
+    if os.name == "nt":
+        return
+    try:
+        if path.exists() and path.stat().st_uid == os.getuid():
+            os.chmod(path, 0o700 if directory else 0o600)
+    except OSError:
+        pass
+
+
+def secure_app_data() -> Path:
+    """Create the app data folder privately and repair older, readable installs."""
+    root = app_data_dir()
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    make_private(root, directory=True)
+    for child in root.rglob("*"):
+        # The data folder is Orchevian's own; everything inside is private.
+        if not child.is_symlink():
+            make_private(child, directory=child.is_dir())
+    return root
+
+
 def default_db_path() -> Path:
     return app_data_dir() / "data.db"
 

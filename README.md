@@ -72,7 +72,9 @@ Orchevian connects to the internet only when you ask it to:
   are never sent.
 - **Model browsing and downloads** from Hugging Face or Ollama.
 
-The local API listens only on `127.0.0.1` and is off until you enable it.
+Your data folder is private to your account, and saved search keys stay on your computer.
+The local API listens only on `127.0.0.1`, is off until you enable it, and requires its own
+key. See [Security](docs/security.md) for details.
 
 ## Documentation
 
@@ -80,7 +82,7 @@ The local API listens only on `127.0.0.1` and is off until you enable it.
 - [Development](docs/development.md): tests, previews, real-model checks, and code layout.
 - [Desktop builds](packaging/README.md)
 - [Changelog](CHANGELOG.md)
-- [Contributing](CONTRIBUTING.md) and [security policy](SECURITY.md)
+- [Security](docs/security.md), [security policy](SECURITY.md), and [contributing](CONTRIBUTING.md)
 - [Design notes](DESIGN.md)
 - [License](LICENSE)
 

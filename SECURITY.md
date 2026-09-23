@@ -15,6 +15,8 @@ Use GitHub's private reporting: open the repository's **Security** tab and choos
 Please don't open a public issue or share details publicly until a fix is released.
 You'll get a reply within 7 days.
 
+How Orchevian protects your data is described in [docs/security.md](docs/security.md).
+
 ## Supported versions
 
 Security fixes go into the latest release. Please update before reporting.

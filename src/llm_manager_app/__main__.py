@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Sequence
 
+from llm_engine.config import secure_app_data
 from llm_engine.logging import setup_logging
 
 
@@ -25,6 +26,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         make_settings,
     )
 
+    # Chats and notes stay private to this account, including older installs.
+    secure_app_data()
     setup_logging()
     args = list(argv) if argv is not None else sys.argv
     app = QApplication(args)

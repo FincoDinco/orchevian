@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import queue
+import secrets
 import socket
 import threading
 import time
@@ -32,6 +34,15 @@ class Message(BaseModel):
     content: str
 
 
+# A request body larger than this is refused before it is read into memory.
+MAX_BODY_BYTES = 4 * 1024 * 1024
+MAX_RESPONSE_TOKENS = 32_768
+
+
+def new_api_key() -> str:
+    return "ov-" + secrets.token_urlsafe(32)
+
+
 class CompletionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     model: str = Field(min_length=1)
@@ -39,7 +50,7 @@ class CompletionRequest(BaseModel):
     stream: bool = False
     temperature: float = Field(default=0.7, ge=0, le=2, allow_inf_nan=False)
     top_p: float = Field(default=0.9, gt=0, le=1, allow_inf_nan=False)
-    max_tokens: int = Field(default=2048, ge=1)
+    max_tokens: int = Field(default=2048, ge=1, le=MAX_RESPONSE_TOKENS)
     n: Literal[1] = 1
 
 
@@ -175,17 +186,60 @@ class _RequestSummary:
                     })
             await send(message)
 
-        if Request(scope).headers.get("origin"):
-            response = JSONResponse(
-                error_body("config_invalid", "Browser origins are disabled."), status_code=403
-            )
-            await response(scope, receive, record_send)
+        headers = Request(scope).headers
+        rejection = None
+        if headers.get("origin"):
+            rejection = (403, "Browser origins are disabled.")
+        elif not self.owner.authorized(headers.get("authorization", "")):
+            # Any program or account on this computer can reach 127.0.0.1; the key
+            # limits the API to clients the user gave it to.
+            rejection = (401, "Missing or wrong API key. Copy it from Settings → API.")
         else:
-            await self.app(scope, receive, record_send)
+            try:
+                declared = int(headers.get("content-length") or 0)
+            except ValueError:
+                declared = MAX_BODY_BYTES + 1
+            if declared > MAX_BODY_BYTES:
+                rejection = (413, "Request body is too large.")
+        if rejection is not None:
+            status, message = rejection
+            code = "config_invalid" if status != 401 else "unauthorized"
+            response = JSONResponse(error_body(code, message), status_code=status)
+            await response(scope, receive, record_send)
+            return
+        # Read the body here, up to the limit: chunked bodies declare no length,
+        # and the app must never buffer more than MAX_BODY_BYTES.
+        parts, size, more = [], 0, scope["method"] in {"POST", "PUT", "PATCH"}
+        while more:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            parts.append(message.get("body", b""))
+            size += len(parts[-1])
+            if size > MAX_BODY_BYTES:
+                response = JSONResponse(
+                    error_body("config_invalid", "Request body is too large."), status_code=413
+                )
+                await response(scope, receive, record_send)
+                return
+            more = message.get("more_body", False)
+        delivered = False
+
+        async def replay():
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": b"".join(parts), "more_body": False}
+            # Afterwards, pass through disconnects so streaming can stop early.
+            return await receive()
+
+        await self.app(scope, replay, record_send)
 
 
 class ApiServerService:
-    def __init__(self, chat: ChatService, catalog: CatalogService, *, port: int = 8080) -> None:
+    def __init__(self, chat: ChatService, catalog: CatalogService, *, port: int = 8080,
+                 api_key: str | None = None) -> None:
+        self.api_key = api_key or new_api_key()
         self._chat = chat
         self._catalog = catalog
         self._port = port
@@ -198,6 +252,12 @@ class ApiServerService:
         self._socket: socket.socket | None = None
         self._stopping = False
         self.app = self._build_app()
+
+    def authorized(self, header: str) -> bool:
+        scheme, _, token = header.partition(" ")
+        return scheme.lower() == "bearer" and hmac.compare_digest(
+            token.strip().encode(), self.api_key.encode()
+        )
 
     def status(self) -> dict:
         with self._lock:
