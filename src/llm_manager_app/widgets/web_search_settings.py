@@ -35,10 +35,14 @@ def load_search_keys(settings: QSettings) -> list[tuple[str, str]]:
 
 
 INTRO = (
-    "You don't need to set anything up here. Web search already works for free: Orchevian "
-    "uses Exa's free search, with Bing as a backup. Exa's free search has a daily limit, so "
-    "if you search a lot and it starts saying it is busy, you can add your own free key below "
-    "for a bigger allowance."
+    "You don't need to set anything up here. Web search already works for free using Exa's "
+    "free search. It has a daily limit, so if you search a lot and it starts saying it is "
+    "busy, you can add your own free key below for a bigger allowance."
+)
+PRIVACY = (
+    "<b>Privacy:</b> when Web search is on, the search service receives your question (up to "
+    "500 characters) and may keep it under its own privacy policy. Your files and saved chats "
+    "are never sent."
 )
 WHAT_IS_A_KEY = (
     "<b>What is an API key?</b> It works like a password that lets Orchevian search with your "
@@ -53,7 +57,7 @@ STEPS = (
 )
 ORDER_NOTE = (
     "Added more than one? Orchevian uses them from top to bottom and moves on if one runs "
-    "out. After your keys it uses Exa's free search, then Bing."
+    "out. After your keys it uses Exa's free search."
 )
 
 
@@ -152,7 +156,7 @@ class WebSearchSettings(QWidget):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(8, 12, 8, 8)
         layout.setSpacing(12)
-        for text in (INTRO, WHAT_IS_A_KEY, STEPS):
+        for text in (INTRO, PRIVACY, WHAT_IS_A_KEY, STEPS):
             label = QLabel(text, body)
             label.setWordWrap(True)
             label.setTextFormat(Qt.TextFormat.RichText if "<" in text else Qt.TextFormat.PlainText)

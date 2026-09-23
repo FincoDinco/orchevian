@@ -20,9 +20,9 @@ def main():
     try:
         result = retrieve_isolated(args.query, threading.Event(), print)
     except EngineError as exc:
-        print(json.dumps({"ok": False, "provider": "Bing public web search", "error": str(exc)}))
+        print(json.dumps({"ok": False, "error": str(exc)}))
         return 1
-    print(json.dumps({"ok": True, "provider": "Bing public web search", **result}, indent=2))
+    print(json.dumps({"ok": True, **result}, indent=2))
     return 0
 
 

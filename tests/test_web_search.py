@@ -325,20 +325,6 @@ def test_reader_limits_and_errors(monkeypatch, kwargs, match):
         web.fetch_public("https://example.com")
 
 
-def test_search_parses_realistic_links_and_rejects_challenges(monkeypatch):
-    markup = '''<a href="https://ad.example">Advertisement</a><li class="b_algo"><h2>
-    <a href="https://www.bing.com/ck/a?u=a1aHR0cHM6Ly9leGFtcGxlLmNvbQ">
-    A <b>reference</b></a></h2></li><li class="b_algo"><h2>
-    <a href="http://localhost">bad</a></h2></li>'''
-    monkeypatch.setattr(web, "fetch_public", lambda url: (url, markup, "text/html"))
-    assert web.BingProvider().search("query") == [web.SearchHit("A reference", "https://example.com")]
-    markup = '<form id="b_captcha">Please solve the challenge</form>'
-    with pytest.raises(EngineError, match="blocked"):
-        web.BingProvider().search("query")
-    markup = '<li class="b_no">There are no results</li>'
-    assert web.BingProvider().search("query") == []
-
-
 def test_retrieval_has_bounded_pages_and_visible_partial_failures():
     class Provider:
         def search(self, query):
@@ -433,13 +419,13 @@ def test_provider_encodes_the_complete_focused_query(monkeypatch):
 
     requested = []
 
-    def fetch(url):
+    def request(method, url, headers, payload=None):
         requested.append(url)
-        return url, '<li class="b_no">There are no results</li>', "text/html"
+        return 200, {"web": {"results": []}}
 
-    monkeypatch.setattr(web, "fetch_public", fetch)
+    monkeypatch.setattr(web, "_request_json", request)
     focused = "Federal Reserve interest rate decision September 2026"
-    web.BingProvider().search(focused)
+    web.BraveProvider("key").search(focused)
     assert "Federal%20Reserve%20interest%20rate" in requested[0]
     assert parse_qs(urlsplit(requested[0]).query)["q"] == [focused]
 
@@ -578,7 +564,7 @@ def test_chat_search_resolves_follow_ups_and_names_the_provider(stack):
     focuses = []
     chat.web.retriever = lambda query, cancel, progress, focus=None: (
         calls.append(query) or focuses.append(focus)
-        or {**result(), "provider": "Bing public web search"}
+        or {**result(), "provider": "Exa (free)"}
     )
     chat.send(cid, TRUMP, web_search=True)
     join(chat)
@@ -587,9 +573,9 @@ def test_chat_search_resolves_follow_ups_and_names_the_provider(stack):
     assert calls[0] == TRUMP
     assert "Trump" in calls[1] and "9/22" in calls[1]
     assert focuses == [None, "Specifically today 9/22"]
-    assert chat.web.history(cid)[0]["provider"] == "Bing public web search"
+    assert chat.web.history(cid)[0]["provider"] == "Exa (free)"
     prompt = backend.prompts[-1][0].content
-    assert "excerpts from Bing public web search" in prompt
+    assert "excerpts from Exa (free)" in prompt
 
 
 def test_every_chat_tells_the_model_todays_date(stack):
@@ -625,34 +611,6 @@ def test_borrowed_subject_alone_does_not_make_a_page_relevant():
                          lambda url: (url, pages[url], "text/plain"), threading.Event(),
                          lambda _: None, focus="What did he say about the Fed decision?")
     assert [source["url"] for source in found["sources"]] == ["https://example.com/fed"]
-
-
-def test_bing_web_and_news_results_alternate_without_duplicates(monkeypatch):
-    news = '''<div class="news-card newsitem cardcommon"
-        url="https://news.example/fed-hike" data-title="Trump reacts to Federal Reserve hike"
-        data-author="Example News"></div>
-        <div class="news-card newsitem cardcommon" url="http://localhost/x"
-        data-title="bad"></div>'''
-    web_page = '''<li class="b_algo"><h2><a href="https://web.example/fed">Fed page</a></h2></li>
-        <li class="b_algo"><h2><a href="https://news.example/fed-hike">Duplicate</a></h2></li>'''
-    requested = []
-
-    def fetch(url):
-        requested.append(url)
-        return url, news if "/news/" in url else web_page, "text/html"
-
-    monkeypatch.setattr(web, "fetch_public", fetch)
-    hits = web.BingProvider().search("Federal Reserve Trump")
-    assert [hit.url for hit in hits] == ["https://web.example/fed", "https://news.example/fed-hike"]
-    assert hits[1].title == "Trump reacts to Federal Reserve hike"
-
-    def news_blocked(url):
-        if "/news/" in url:
-            raise EngineError("web_failed", "blocked")
-        return url, web_page, "text/html"
-
-    monkeypatch.setattr(web, "fetch_public", news_blocked)
-    assert [hit.url for hit in web.BingProvider().search("q")][0] == "https://web.example/fed"
 
 
 @pytest.mark.parametrize("question, earlier, expected", [
@@ -705,7 +663,7 @@ def test_each_search_service_parses_results_and_explains_key_problems(monkeypatc
     respond(200, SERVICE_RESPONSES[service])
     hits = provider.search("Federal Reserve Trump")
     assert [hit.url for hit in hits] == ["https://a.example/fed"]
-    # Tavily and Exa send page text; Serper and Brave pages are read like Bing's.
+    # Tavily and Exa send page text; Serper and Brave result pages are read directly.
     assert bool(hits[0].content) == (service in {"tavily", "exa"})
     method, url, headers, _ = calls[-1]
     assert url.startswith("https://") and "secret-key" not in url
@@ -719,7 +677,7 @@ def test_each_search_service_parses_results_and_explains_key_problems(monkeypatc
         provider.search("q")
 
 
-def test_keyed_search_tries_services_in_order_then_falls_back_to_bing(monkeypatch):
+def test_keyed_search_tries_services_in_order_then_explains_failure(monkeypatch):
     def request(method, url, headers, payload=None):
         if "tavily" in url:
             return 432, {}
@@ -730,12 +688,10 @@ def test_keyed_search_tries_services_in_order_then_falls_back_to_bing(monkeypatc
     assert [hit.url for hit in search.search("q")] == ["https://a.example/fed"]
     assert search.name == "Exa" and "Tavily searches are used up" in search.notice
 
+    # No scraping fallback: when every service fails, the reason and a next step show.
     monkeypatch.setattr(web, "_request_json", lambda *a, **k: (401, {}))
-    monkeypatch.setattr(web.BingProvider, "search",
-                        lambda self, q: [web.SearchHit("Bing", "https://b.example/")])
-    search = web.KeyedSearch([("tavily", "a")])
-    assert search.search("q")[0].url == "https://b.example/"
-    assert search.name == web.BingProvider.name and search.notice.endswith("Used Bing instead.")
+    with pytest.raises(EngineError, match="Tavily did not accept.*Settings → Web Search"):
+        web.KeyedSearch([("tavily", "a")]).search("q")
 
 
 def test_key_check_reports_plainly(monkeypatch):
@@ -790,7 +746,7 @@ def test_free_exa_needs_no_key_and_parses_highlights(monkeypatch):
         web.ExaFreeProvider().search("q")
 
 
-def test_default_chain_is_free_exa_with_the_question_then_bing(monkeypatch):
+def test_default_chain_is_free_exa_with_the_question(monkeypatch):
     asked = []
 
     def request(method, url, headers, payload=None):
@@ -804,9 +760,6 @@ def test_default_chain_is_free_exa_with_the_question_then_bing(monkeypatch):
     assert asked == ["What did Trump say about the Fed?"] and hits
 
     monkeypatch.setattr(web, "_request_json", lambda *a, **k: (500, {}))
-    monkeypatch.setattr(web.BingProvider, "search",
-                        lambda self, q: [web.SearchHit("Bing", "https://b.example/")])
-    chain = web.SearchChain()
-    assert chain.search("q")[0].url == "https://b.example/"
-    assert chain.name == web.BingProvider.name
-    assert "Exa's free search did not answer. Used Bing instead." == chain.notice
+    with pytest.raises(EngineError, match="Exa's free search did not answer. Try again"):
+        web.SearchChain().search("q")
+    assert not hasattr(web, "BingProvider")

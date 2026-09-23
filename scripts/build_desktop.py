@@ -20,6 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> int:
     # Keep PyInstaller's cache inside the project, including on managed build hosts.
     env = os.environ | {"PYINSTALLER_CONFIG_DIR": str(ROOT / "build" / "pyinstaller-cache")}
+    # Notices for exactly the packages in this environment, which the spec bundles.
+    subprocess.run(
+        [sys.executable, "scripts/third_party_notices.py", "build/THIRD_PARTY_NOTICES.txt"],
+        cwd=ROOT, check=True,
+    )
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
          "packaging/orchevian.spec"],

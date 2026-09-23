@@ -19,9 +19,9 @@ previously called LLM Manager; existing chats, models, projects, and notes carry
 - Document attachments with cited sources, image reading, and local OCR.
 - File creation at any point in a chat: Word, PDF, Excel, PowerPoint, HTML, charts, and
   data formats, with previews, versions, revisions, and templates.
-- Optional web search that works with no setup (Exa's free search, with Bing as a
-  backup), follow-up question handling, and optional keys for Exa, Serper, Tavily, and
-  Brave Search in **Settings → Web Search**.
+- Optional web search that works with no setup (Exa's free search), follow-up question
+  handling, and optional keys for Exa, Serper, Tavily, and Brave Search in
+  **Settings → Web Search**. Search engines' results pages are never scraped.
 - Second Brain: linked Markdown notes captured from chats, with backlinks, a graph
   view, and recall in later chats.
 - Templates, Private Chat, an OpenAI-compatible local API, and a terminal chat.

@@ -1,7 +1,7 @@
 """Broader local-model acceptance with isolated data and independent native read-back.
 
 No model downloads or user-library access. Synthetic web evidence tests answer
-behavior separately from provider availability; --live-web also exercises Bing.
+behavior separately from provider availability; --live-web also exercises live search.
 Reports retain prompts, raw model output, evidence, native files and previews.
 Passing these bounded cases is not a native Office or general quality guarantee.
 """

@@ -54,7 +54,8 @@ Orchevian is in development ahead of its 1.0 release. For now, run it from sourc
    To run GGUF or MLX models without Ollama, add `--extra gguf` (all systems) or
    `--extra mlx` (Apple Silicon) to `uv sync`.
 
-4. Open **Models** to download a model, then start a chat.
+4. Open **Models** to download a model, then start a chat. Each model has its own
+   license (shown on its download page); check it before commercial use.
 
 Preview desktop builds that don't need Python are described in
 [packaging/README.md](packaging/README.md). They are not yet signed or packaged as
@@ -66,8 +67,9 @@ Models run on your computer, and your chats, files, and notes are stored locally
 Orchevian connects to the internet only when you ask it to:
 
 - **Web search**, when you turn it on for a message. Up to 500 characters of that
-  question go to the search service (Exa's free search by default, Bing as a backup,
-  or a service you added a key for). Files and saved chats are never sent.
+  question go to the search service (Exa's free search by default, or a service you
+  added a key for), which may keep it under its own privacy policy. Files and saved chats
+  are never sent.
 - **Model browsing and downloads** from Hugging Face or Ollama.
 
 The local API listens only on `127.0.0.1` and is off until you enable it.
@@ -78,6 +80,7 @@ The local API listens only on `127.0.0.1` and is off until you enable it.
 - [Development](docs/development.md): tests, previews, real-model checks, and code layout.
 - [Desktop builds](packaging/README.md)
 - [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md) and [security policy](SECURITY.md)
 - [Design notes](DESIGN.md)
 - [License](LICENSE)
 

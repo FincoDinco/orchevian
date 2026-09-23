@@ -34,14 +34,23 @@ NOTICE = (
 )
 
 
-def license_path() -> Path | None:
-    """The bundled LICENSE (desktop builds) or the repository's (source checkout)."""
+def _bundled(name: str) -> Path | None:
+    """A file shipped beside the app (desktop builds) or in the source checkout."""
     roots = [Path(getattr(sys, "_MEIPASS", "")), Path(__file__).resolve().parents[3]]
     for root in roots:
-        candidate = root / "LICENSE"
+        candidate = root / name
         if str(root) and candidate.is_file():
             return candidate
     return None
+
+
+def license_path() -> Path | None:
+    return _bundled("LICENSE")
+
+
+def notices_path() -> Path | None:
+    """Third-party notices exist in desktop builds; a source checkout uses its own packages."""
+    return _bundled("THIRD_PARTY_NOTICES.txt") if getattr(sys, "frozen", False) else None
 
 
 class AboutDialog(QDialog):
@@ -64,7 +73,14 @@ class AboutDialog(QDialog):
         notice.setFixedWidth(460)  # Wrapped text needs a width to compute its height.
 
         self.license_button = QPushButton("View License", self)
-        self.license_button.clicked.connect(self.show_license)
+        self.license_button.clicked.connect(
+            lambda: self._show_text(license_path(), "GNU General Public License v3.0", LICENSE_URL)
+        )
+        self.notices_button = QPushButton("Third-Party Notices", self)
+        self.notices_button.setVisible(notices_path() is not None)
+        self.notices_button.clicked.connect(
+            lambda: self._show_text(notices_path(), "Third-Party Notices", SOURCE_URL)
+        )
         source = QPushButton("Source Code", self)
         source.setToolTip(SOURCE_URL)
         source.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(SOURCE_URL)))
@@ -73,6 +89,7 @@ class AboutDialog(QDialog):
         close.clicked.connect(self.accept)
         buttons = QHBoxLayout()
         buttons.addWidget(self.license_button)
+        buttons.addWidget(self.notices_button)
         buttons.addWidget(source)
         buttons.addStretch(1)
         buttons.addWidget(close)
@@ -92,12 +109,14 @@ class AboutDialog(QDialog):
         layout.addLayout(buttons)
 
     def show_license(self) -> None:
-        path = license_path()
+        self.license_button.click()
+
+    def _show_text(self, path: Path | None, title: str, fallback_url: str) -> None:
         if path is None:
-            QDesktopServices.openUrl(QUrl(LICENSE_URL))
+            QDesktopServices.openUrl(QUrl(fallback_url))
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle("GNU General Public License v3.0")
+        dialog.setWindowTitle(title)
         dialog.resize(640, 560)
         text = QPlainTextEdit(dialog)
         text.setObjectName("licenseText")

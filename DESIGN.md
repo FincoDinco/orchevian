@@ -1136,9 +1136,12 @@ an output file exists.
 Working-tree status (September 17): engine-owned search/page retrieval, the shared
 composer toggle, per-draft choice and project transfer, explicit regeneration
 state, progress/stop, and retained linked source excerpts are implemented. The
-provider is Bing public HTML search (web plus news results, interleaved). Per the
-September 17 distribution requirement, there is no required API, key, subscription, user
-account, or hosted Orchevian backend. By default search uses Exa's free keyless search (its hosted MCP endpoint, one stateless call; Exa documents free rate-limited use without a key), and Bing when Exa is busy or at its limit. Optionally, each person can add their own key for Exa, Serper, Tavily or Brave Search in Settings → Web Search (Tavily and Brave need a card on file); keys are tried in that order, then free Exa, then Bing. Keys are the user's own (no shared developer credential), are stored in the app's local settings file, and are sent only to that service.
+default provider is Exa's free keyless search. Per the September 17 distribution
+requirement, there is no required API, key, subscription, user account, or hosted Orchevian
+backend. Exa is reached through its hosted MCP endpoint in one stateless call; Exa documents
+free rate-limited use without a key. The earlier Bing HTML fallback was removed on September
+23 because Bing's robots.txt disallows /search and Microsoft's terms restrict automated
+access; when every service fails, the reply stops with an explanation. Optionally, each person can add their own key for Exa, Serper, Tavily or Brave Search in Settings → Web Search (Tavily and Brave need a card on file); keys are tried in that order, then free Exa. Keys are the user's own (no shared developer credential), are stored in the app's local settings file, and are sent only to that service.
 Only a focused query built from the current message (capped at 500 characters)
 goes to the provider. A follow-up with no subject of its own (such as "Specifically today 9/22") borrows the subject of one of the three previous questions in that chat. Every chat's system prompt starts with the local calendar date so the model reads 'today' and dated sources correctly; the stateless local API is unchanged. Conversational filler is removed, and simple recent Fed-rate
 questions expand to a neutral dated Federal Reserve decision search. A

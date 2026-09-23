@@ -85,6 +85,15 @@ layout/recalculation, and packaged real-model inference remain unverified.
 A later September 22 rebuild with the model-matrix and web-connection fixes passed
 the same built and extracted-archive checks.
 
+## Licenses in the build
+
+Each build includes `LICENSE` (Orchevian's GPL-3.0) and `THIRD_PARTY_NOTICES.txt`, which
+`scripts/third_party_notices.py` generates from the packaging environment before PyInstaller
+runs. It lists Python, every bundled package with its license texts, and Qt/PySide6 under
+LGPL-3.0 (text in `packaging/licenses/`) with links to their source code. Qt stays as
+separate shared libraries so users can replace it, as the LGPL requires. Both files are
+viewable in **Help → About Orchevian**.
+
 ## Packaging decisions
 
 The [PyInstaller spec](https://pyinstaller.org/en/stable/spec-files.html) explicitly

@@ -64,6 +64,11 @@ The image switch persists per regular chat; private images, OCR text, previews, 
 
 ## Models
 
+> **Models have their own licenses.** Orchevian doesn't include any models. Each model you
+> download comes with its own license, and some (for example Llama and Gemma) restrict
+> certain uses. Check a model's license on its Hugging Face or Ollama page before relying
+> on it, especially for commercial work.
+
 **Settings → Models → Default model for new chats** chooses the app-wide fallback. An explicit model choice wins, then a project default, then the app default. Existing conversations keep their own model. Defaults retain the complete Ollama, GGUF, or MLX reference; a missing model or unavailable runtime is shown without silently substituting another model. Choosing a default does not load it.
 
 Models use short display names, such as **Qwen 3 · 8B**, grouped under Ollama, GGUF, and MLX. Select a downloaded model and choose **Edit model…** to edit its display name in place. Save commits the name; Cancel discards the edit; a blank name restores the suggestion. Names are saved locally and appear in chats and project selection too. Renaming does not move model files or change existing conversation references. Original identifiers remain in the editor, tooltips, and model details.
@@ -114,19 +119,21 @@ what is sent. Search-off makes no search or page-reading requests.
 
 By default search uses [Exa's free keyless search](https://exa.ai/docs/reference/exa-mcp),
 which returns page highlights directly, so it also covers pages that need JavaScript, such
-as weather forecasts. If Exa is busy or at its free limit, the app falls back to
-[Bing's public web search](https://www.microsoft.com/en-us/bing/features/web-search/),
-reading public HTML results and Bing News. No API, account, key, subscription, shared
-developer credential, or hosted Orchevian backend is required.
-Provider blocks and changes to the results page remain possible; the app reports them
-without bypassing challenges or pretending it retrieved sources.
+as weather forecasts. No API, account, key, subscription, shared developer credential,
+or hosted Orchevian backend is required. If Exa is busy or at its free limit, the reply
+stops with an explanation; try again later or add a free key. Orchevian never scrapes
+search engines' results pages, which their terms and robots.txt forbid.
+
+**Privacy:** the search service receives your question (up to 500 characters) and may keep
+it under its own privacy policy; see [Exa's terms](https://exa.ai/assets/Exa_Labs_Terms_of_Service.pdf)
+or those of the service you added a key for.
 
 **Optional: a bigger allowance with your own free key.** Exa's free search has a daily
 limit. Heavy users can open **Settings → Web Search**, which explains each step: pick a
 service (Exa is the easiest start: free monthly credits, no credit card), click **Get a free
 key**, create an account, copy the key, paste it in and click **Test**. Serper also has a free
 start without a card; Tavily and Brave Search need a card on file. With several keys,
-Orchevian tries them top to bottom, then Exa's free search, then Bing; **Web sources** says which service answered and why any was skipped. Your key
+Orchevian tries them top to bottom, then Exa's free search; **Web sources** says which service answered and why any was skipped. Your key
 stays in Orchevian's settings on this computer and is only sent to that service.
 
 Search and reading progress appear above the composer. **Stop** cancels the reader

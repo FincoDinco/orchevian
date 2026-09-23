@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import http.client
 import ipaddress
 import json
@@ -16,9 +15,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from html.parser import HTMLParser
-from itertools import zip_longest
 from typing import Protocol
-from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
 
 from llm_engine.domain.errors import EngineError
 
@@ -97,7 +95,7 @@ def resolve_follow_up(question: str, earlier: Sequence[str] = ()) -> str:
         for previous in reversed(recent):
             names = _names(previous)
             if names:
-                # Topic first: Bing ranks leading words highest, and a leading
+                # Topic first: search engines weigh leading words most, and a leading
                 # famous name returns biography pages instead of the topic.
                 return _join(question, names[0])
         # No capitalized name to point at ('donald trump'): borrow the question.
@@ -202,7 +200,7 @@ def search_query(question: str, *, today: date | None = None) -> str:
     seen = set()
     words = [word for word in words
              if not (word.casefold() in seen or seen.add(word.casefold()))]
-    # Named subjects lead: Bing weighs leading words most. 'weather Paris'
+    # Named subjects lead: search engines weigh leading words most. 'weather Paris'
     # returned the searcher's local forecast, 'Paris weather' returned Paris;
     # 'donald trump Federal Reserve rates' returned biographies, while
     # 'Federal Reserve rates donald trump' returned Fed news. Reordered after
@@ -386,130 +384,6 @@ class SearchProvider(Protocol):
     def search(self, query: str) -> list[SearchHit]: ...
 
 
-class _SearchHTML(HTMLParser):
-    """Read only organic result headings from Bing's public HTML page."""
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.hits = []
-        self._url = None
-        self._title = []
-        self._li_depth = 0
-        self._result_depth = None
-        self._heading = False
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        if tag == "li":
-            self._li_depth += 1
-            if "b_algo" in attrs.get("class", "").split():
-                self._result_depth = self._li_depth
-        if tag == "h2" and self._result_depth is not None:
-            self._heading = True
-        if tag == "a" and self._heading:
-            url = urljoin("https://www.bing.com", attrs.get("href", ""))
-            try:
-                parsed = urlsplit(url)
-                if parsed.hostname in {"bing.com", "www.bing.com"}:
-                    encoded = parse_qs(parsed.query).get("u", [""])[0]
-                    if not encoded.startswith("a1"):
-                        return
-                    encoded = encoded[2:]
-                    url = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
-                self._url = public_url(url)
-                self._title = []
-            except (ValueError, UnicodeError, EngineError):
-                self._url = None
-
-    def handle_data(self, data):
-        if self._url:
-            self._title.append(data)
-
-    def handle_endtag(self, tag):
-        if tag == "a" and self._url:
-            title = " ".join(" ".join(self._title).split())[:200]
-            if self._url not in {hit.url for hit in self.hits}:
-                self.hits.append(SearchHit(title or self._url, self._url))
-            self._url = None
-        if tag == "h2":
-            self._heading = False
-        if tag == "li":
-            if self._li_depth == self._result_depth:
-                self._result_depth = None
-                self._heading = False
-            self._li_depth = max(0, self._li_depth - 1)
-
-
-class _NewsHTML(HTMLParser):
-    """Read article links from Bing News result cards (url and data-title attributes)."""
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.hits = []
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        if tag != "div" or "news-card" not in (attrs.get("class") or "").split():
-            return
-        try:
-            url = public_url(attrs.get("url") or "")
-        except (ValueError, UnicodeError, EngineError):
-            return
-        title = " ".join((attrs.get("data-title") or "").split())[:200]
-        if url not in {hit.url for hit in self.hits}:
-            self.hits.append(SearchHit(title or url, url))
-
-
-# For current events Bing's web ranking drifts to biographies and unrelated sites
-# while its news vertical returns the actual coverage; reference questions are the
-# reverse. Alternate the two and let relevance ranking choose.
-MAX_NEWS = 5
-
-
-class BingProvider:
-    """Public HTML search: no API, account, key, login or challenge bypass."""
-
-    name = "Bing public web search"
-
-    def search(self, query):
-        params = urlencode({"q": query[:MAX_QUERY]}, quote_via=quote)
-        news = []
-        try:
-            _, content, _ = fetch_public("https://www.bing.com/news/search?" + params)
-            parser = _NewsHTML()
-            parser.feed(content)
-            news = parser.hits[:MAX_NEWS]
-        except (EngineError, OSError, ValueError, http.client.HTTPException):
-            pass  # Web results alone still answer; news is an improvement, not a requirement.
-        try:
-            web = self._web(params)
-        except EngineError:
-            if news:
-                return news
-            raise
-        merged, seen = [], set()
-        for pair in zip_longest(web, news):
-            for hit in pair:
-                if hit is not None and hit.url not in seen:
-                    seen.add(hit.url)
-                    merged.append(hit)
-        return merged[:MAX_CANDIDATES]
-
-    def _web(self, params):
-        _, content, _ = fetch_public("https://www.bing.com/search?" + params)
-        parser = _SearchHTML()
-        parser.feed(content)
-        if not parser.hits:
-            if "b_no" in content and "no results" in content.lower():
-                return []
-            raise EngineError(
-                "web_failed", "Bing returned a blocked or unrecognized search page. "
-                "Try later or turn Web search off."
-            )
-        return parser.hits[:MAX_CANDIDATES]
-
-
-
 def _request_json(method: str, url: str, headers: dict,
                   payload: dict | None = None) -> tuple[int, dict]:
     """JSON request to a validated public HTTPS endpoint; returns (status, parsed body)."""
@@ -608,7 +482,7 @@ class ExaProvider(_KeyedProvider):
 
 
 class SerperProvider(_KeyedProvider):
-    """Google results with short snippets; pages are read like Bing results."""
+    """Google results with short snippets; result pages are then read directly."""
 
     name = "Serper"
 
@@ -622,7 +496,7 @@ class SerperProvider(_KeyedProvider):
 
 
 class BraveProvider(_KeyedProvider):
-    """Brave's own index; pages are read like Bing results."""
+    """Brave's own index; result pages are then read directly."""
 
     name = "Brave Search"
 
@@ -702,7 +576,7 @@ class ExaFreeProvider:
 
 
 class SearchChain:
-    """Services with the person's keys (in order), then free Exa, then Bing.
+    """Services with the person's keys (in order), then Exa's free search.
 
     `notice` explains any service that was skipped, for the Web sources panel.
     """
@@ -732,10 +606,12 @@ class SearchChain:
             self.name = provider.name
             self.notice = " ".join(problems)
             return hits
-        self.name = BingProvider.name
-        if problems:
-            self.notice = " ".join(problems) + " Used Bing instead."
-        return BingProvider().search(query)
+        # No scraping fallback: search engines' terms and robots.txt forbid
+        # automated use of their results pages.
+        raise EngineError(
+            "web_failed", " ".join(problems) + " Try again in a moment, or add a free search "
+            "key in Settings → Web Search.",
+        )
 
 
 KeyedSearch = SearchChain  # Earlier name.
