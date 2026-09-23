@@ -167,7 +167,7 @@ def test_disconnect_shutdown_restart_and_bind_failure(stack):
     wait_for(lambda: not chat._generating)
     api.stop()
     assert not api.status()["running"]
-    with pytest.raises(httpx.ConnectError):
+    with pytest.raises((httpx.ConnectError, httpx.ConnectTimeout)):
         httpx.get(f"http://127.0.0.1:{port}/v1/models", timeout=1)
     assert api.start(port)["running"]
     api.stop()

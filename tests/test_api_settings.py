@@ -77,7 +77,7 @@ def test_main_window_owns_shared_api_and_closes_listener(tmp_path):
         assert not window._api.status()["running"]
         import httpx
         import pytest
-        with pytest.raises(httpx.ConnectError):
+        with pytest.raises((httpx.ConnectError, httpx.ConnectTimeout)):
             httpx.get(f"http://127.0.0.1:{port}/v1/models", timeout=1)
     finally:
         window.close()

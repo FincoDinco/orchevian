@@ -25,20 +25,25 @@ from llm_engine.config import (
 from llm_engine.domain.errors import EngineError
 
 
-def test_default_db_path_is_xdg_on_all_oses() -> None:
+def test_default_db_path_is_xdg_on_all_oses(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    # A new install uses Orchevian's folder...
+    assert default_db_path() == tmp_path / ".local" / "share" / "orchevian" / "data.db"
+    # ...while an existing LLM Manager library keeps being used in place.
+    (tmp_path / ".local" / "share" / "llm-manager").mkdir(parents=True)
     path = default_db_path()
-    assert path == Path.home() / ".local" / "share" / "llm-manager" / "data.db"
     assert path.parts[-4:] == (".local", "share", "llm-manager", "data.db")
 
 
-def test_default_paths_ignore_appdata(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_paths_ignore_appdata(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setenv("APPDATA", r"C:\Users\seth\AppData\Roaming")
     monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\seth\AppData\Local")
     db = default_db_path()
     cfg = default_config_path()
     assert "AppData" not in db.parts
     assert "AppData" not in cfg.parts
-    assert cfg == Path.home() / ".local" / "share" / "llm-manager" / "config.json"
+    assert cfg == tmp_path / ".local" / "share" / "orchevian" / "config.json"
 
 
 def test_env_overrides_db_and_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

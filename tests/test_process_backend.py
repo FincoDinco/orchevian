@@ -315,8 +315,9 @@ def test_ollama_stop_closes_request_before_headers_and_unloads_model(phase):
         cancel.set()
         thread.join(3)
         assert not thread.is_alive()
-        assert disconnected.wait(1)
-        assert unloaded.wait(1)
+        # Windows reports a closed connection to the server more slowly.
+        assert disconnected.wait(5)
+        assert unloaded.wait(5)
         assert backend._process is None
         assert not session.status().generating
         if phase == "load":

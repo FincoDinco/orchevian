@@ -310,7 +310,8 @@ def test_sidebar_collapses_to_named_tab_width(tmp_path: Path) -> None:
         assert tree is not None and btn is not None
         assert not sidebar.is_collapsed()
         rail = sidebar.tab_width()
-        assert rail < 160
+        # A narrow rail; Windows' wider system font needs more room than macOS.
+        assert rail < 220
         expanded = window._splitter.sizes()[0]
         assert expanded > rail
         chats = sidebar._chats_item
