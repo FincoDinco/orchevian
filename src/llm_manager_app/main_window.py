@@ -677,6 +677,17 @@ class MainWindow(QMainWindow):
         shortcuts_act.setObjectName("shortcutsAction")
         shortcuts_act.triggered.connect(self._open_shortcuts)
         help_menu.addAction(shortcuts_act)
+        help_menu.addSeparator()
+        # macOS moves these roles into the application menu.
+        about_act = QAction("About Orchevian", self)
+        about_act.setObjectName("aboutAction")
+        about_act.setMenuRole(QAction.MenuRole.AboutRole)
+        about_act.triggered.connect(self._open_about)
+        help_menu.addAction(about_act)
+        about_qt = QAction("About Qt", self)
+        about_qt.setMenuRole(QAction.MenuRole.AboutQtRole)
+        about_qt.triggered.connect(QApplication.aboutQt)
+        help_menu.addAction(about_qt)
 
     def _restore_chrome(self) -> None:
         self._chat_view.set_return_sends(
@@ -825,6 +836,15 @@ class MainWindow(QMainWindow):
         self._shortcuts_dialog.show()
         self._shortcuts_dialog.raise_()
         self._shortcuts_dialog.activateWindow()
+
+    def _open_about(self) -> None:
+        from llm_manager_app.widgets.about import AboutDialog
+
+        if getattr(self, "_about_dialog", None) is None:
+            self._about_dialog = AboutDialog(self)
+        self._about_dialog.show()
+        self._about_dialog.raise_()
+        self._about_dialog.activateWindow()
 
     def _on_appearance(self, theme: str) -> None:
         qt_app = QApplication.instance()

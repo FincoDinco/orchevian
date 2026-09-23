@@ -26,6 +26,12 @@ dependencies = [
     "pydantic>=2,<3",
 ]
 
+[project.urls]
+Homepage = "https://github.com/FincoDinco/orchevian"
+Source = "https://github.com/FincoDinco/orchevian"
+Issues = "https://github.com/FincoDinco/orchevian/issues"
+Changelog = "https://github.com/FincoDinco/orchevian/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 mlx = ["mlx-lm; sys_platform == 'darwin' and platform_machine == 'arm64'"]
 gguf = ["llama-cpp-python"]

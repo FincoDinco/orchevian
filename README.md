@@ -45,7 +45,7 @@ Orchevian is in development ahead of its 1.0 release. For now, run it from sourc
 3. Download and start Orchevian:
 
    ```bash
-   git clone https://github.com/FincoDinco/llm-manager.git orchevian
+   git clone https://github.com/FincoDinco/orchevian.git
    cd orchevian
    uv sync --extra gui
    uv run orchevian
