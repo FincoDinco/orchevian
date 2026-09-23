@@ -6,7 +6,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import QObject, QPoint, QSize, Qt, QThread, Signal
+from PySide6.QtCore import QObject, QPoint, QPropertyAnimation, QSize, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -25,6 +25,7 @@ from llm_engine.services.discovery import GIB
 from llm_engine.services.downloads import DownloadChoice, DownloadPlan, DownloadService
 from llm_manager_app.icons import icon
 from llm_manager_app.model_names import friendly_name
+from llm_manager_app.motion import ENTER_MS, ease_out, prefers_reduced_motion
 
 _ACTIVE = {"Queued", "Downloading", "Cancelling"}
 
@@ -366,7 +367,20 @@ class DownloadsPopover(QFrame):
     def show_for(self, anchor: QWidget) -> None:
         self._anchor = anchor
         self._resize_to_content()
-        self.show()
+        if prefers_reduced_motion():
+            self.setWindowOpacity(1.0)
+            self.show()
+        else:
+            # Opened by a click, occasionally: a short fade ties it to its button.
+            # Closing stays instant, as macOS dismisses popovers.
+            self.setWindowOpacity(0.0)
+            self.show()
+            fade_in = QPropertyAnimation(self, b"windowOpacity", self)
+            fade_in.setStartValue(0.0)
+            fade_in.setEndValue(1.0)
+            fade_in.setDuration(ENTER_MS)
+            fade_in.setEasingCurve(ease_out())
+            fade_in.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
         self.setFocus(Qt.FocusReason.PopupFocusReason)
 
     def _resize_to_content(self) -> None:

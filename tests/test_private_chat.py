@@ -8,7 +8,7 @@ from llm_engine.backends.fake import FakeBackend
 from llm_engine.backends.registry import BackendRegistry
 from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import BackendName, ModelRef
-from llm_engine.services.chat import ChatService
+from llm_engine.services.chat import ChatService, current_date_note
 from llm_engine.services.session import ModelSession
 from llm_engine.store.library import LibraryService
 from llm_engine.store.sqlite import SqliteStore
@@ -52,7 +52,9 @@ def test_private_chat_keeps_only_current_chat_context_and_never_writes(tmp_path,
         service._worker_thread.join(3)
         service.send(cid, "Private follow-up")
         service._worker_thread.join(3)
+        # Only the date note; saved guidance stays out of the private prompt.
         assert [(turn.role, turn.content) for turn in backend.prompts[-1]] == [
+            ("system", current_date_note()),
             ("user", "Private first message"), ("assistant", "Hello world"),
             ("user", "Private follow-up"),
         ]

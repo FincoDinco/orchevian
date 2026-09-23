@@ -264,8 +264,9 @@ def main() -> None:
                 "Keep frequent actions easy to find and let optional details stay out of the way."
             )
             window._model_status_timer.stop()
-            window._model_activity_action.setVisible(True)
             window._model_activity.set_activity(True, "Model is thinking…")
+            window._model_activity._reveal.stop()
+            window._model_activity_action.setVisible(True)  # Skip the delay and fade.
             capture("chat-thinking-collapsed-dark")
             window._on_appearance("light")
             window.resize(1024, 680)

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from llm_engine import config
 from llm_manager_app.model_preferences import default_model, save_default_model
+from llm_manager_app.widgets.web_search_settings import WebSearchSettings
 
 ORG_NAME = "Orchevian"
 APP_NAME = "Orchevian"
@@ -143,6 +144,7 @@ class SettingsDialog(QWidget):
     appearance_changed = Signal(str)
     return_sends_changed = Signal(bool)
     rescan_requested = Signal()
+    web_search_keys_changed = Signal(list)
 
     def __init__(
         self,
@@ -176,6 +178,9 @@ class SettingsDialog(QWidget):
         tabs = QTabWidget(self)
         tabs.setObjectName("settingsTabs")
         tabs.addTab(self._build_general(), "General")
+        self.web_search = WebSearchSettings(settings, self)
+        self.web_search.keys_changed.connect(self.web_search_keys_changed)
+        tabs.addTab(self.web_search, "Web Search")
         tabs.addTab(self._build_models(), "Models")
         if self._api is not None:
             tabs.addTab(self._build_api(), "API")

@@ -533,3 +533,34 @@ def test_repair_lists_distinct_errors_after_many_malformed_rows(tmp_path):
             assert "input_value" not in repair
         finally:
             session.force_unload()
+
+
+class SingleSystemBackend(StructuredBackend):
+    """Rejects a second system message, as Qwen's chat template does."""
+
+    def stream_generate(self, handle, messages, params, cancel):
+        if any(turn.role == "system" for turn in messages[1:]):
+            raise EngineError("backend_unavailable", "System message must be at the beginning.")
+        yield from super().stream_generate(handle, messages, params, cancel)
+
+
+def test_files_can_be_created_later_in_a_chat_with_guidance(tmp_path):
+    call = json.dumps({"tool": "create_documents", "files": [specification("docx").model_dump()]})
+    backend = SingleSystemBackend(["Here are five names.", call])
+    with SqliteStore(tmp_path / "data.db") as store:
+        library = LibraryService(store)
+        errors = []
+        chat = ChatService(library, ModelSession(BackendRegistry([backend])),
+                           on_error=lambda *args: errors.append(args))
+        cid = library.create_conversation(model=backend.list_models()[0].ref).summary.id
+        chat.set_system_prompt(cid, "Keep answers short.")
+        chat.send(cid, "Suggest five puppy names")
+        chat._worker_thread.join(30)
+        chat.send(cid, "Put those names in a Word document", artifact_request={})
+        chat._worker_thread.join(30)
+        assert not errors
+        assert len(chat.artifacts.list(cid)) == 1
+        system = backend.prompts[-1][0]
+        assert system.role == "system"
+        assert "create_documents" in system.content and "Keep answers short." in system.content
+        assert "Suggest five puppy names" in " ".join(t.content for t in backend.prompts[-1])

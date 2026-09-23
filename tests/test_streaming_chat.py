@@ -160,7 +160,7 @@ def test_streaming_plain_then_markdown_on_done(tmp_path: Path) -> None:
     except Exception as exc:
         pytest.skip(f"no display: {exc}")
 
-    from PySide6.QtWidgets import QPlainTextEdit, QTextBrowser, QWidget
+    from PySide6.QtWidgets import QTextBrowser, QWidget
 
     fake = ProbeFake(models=[LOCAL], chunks=("Hello ", "**world**"))
     window, store, library, probe = _window(tmp_path, fake)
@@ -179,14 +179,15 @@ def test_streaming_plain_then_markdown_on_done(tmp_path: Path) -> None:
 
             def on_token(self, *_args: object) -> None:
                 transcript = window._chat_view.transcript()
-                plain = window.findChild(QPlainTextEdit, "transcriptStream")
+                transcript.flush_stream()
+                browser = window.findChild(QTextBrowser, "transcriptHistory")
                 caret = window.findChild(QWidget, "streamCaret")
                 self.states.append(
                     (
                         "token",
                         transcript.is_streaming(),
                         transcript.is_plain(),
-                        (plain.toPlainText() if plain is not None else ""),
+                        (browser.toPlainText() if browser is not None else ""),
                     )
                 )
                 assert caret is not None and caret.isVisible()
@@ -216,7 +217,8 @@ def test_streaming_plain_then_markdown_on_done(tmp_path: Path) -> None:
         assert states
         assert states[0][0] == "token"
         assert states[0][1] is True
-        assert states[0][2] is True
+        # Markdown renders while streaming; the plain view is only for errors.
+        assert states[0][2] is False
         assert "Hello" in states[0][3]
         assert states[-1][0] == "done"
         assert states[-1][1] is False
@@ -326,7 +328,6 @@ def test_stop_escape_cancels(tmp_path: Path) -> None:
 
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QKeySequence, QShortcut
-    from PySide6.QtWidgets import QPlainTextEdit
 
     fake = ProbeFake(models=[LOCAL], chunks=tuple(["."] * 32), gate_after=32)
     window, store, library, probe = _window(tmp_path, fake)
@@ -340,19 +341,14 @@ def test_stop_escape_cancels(tmp_path: Path) -> None:
         window._chat_view.composer().submit()
         assert probe.entered.wait(2.0)
         deadline = time.monotonic() + 2.0
-        plain = None
+        transcript = window._chat_view.transcript()
         while time.monotonic() < deadline:
             app.processEvents()
-            plain = window.findChild(QPlainTextEdit, "transcriptStream")
-            if (
-                window._chat_view.transcript().is_streaming()
-                and plain is not None
-                and "." in plain.toPlainText()
-            ):
+            if transcript.is_streaming() and "." in transcript.buffer():
                 break
             time.sleep(0.01)
-        assert window._chat_view.transcript().is_streaming()
-        assert plain is not None and "." in plain.toPlainText()
+        assert transcript.is_streaming()
+        assert "." in transcript.buffer()
         shortcuts = window.findChildren(QShortcut)
         assert any(s.key().matches(QKeySequence(Qt.Key.Key_Escape)) for s in shortcuts)
         window._chat_view.stop()
@@ -387,11 +383,12 @@ def test_regenerate_replaces_assistant(tmp_path: Path) -> None:
         )
         first = library.get_conversation(cid)
         assert [turn.role for turn in first.messages] == ["user", "assistant"]
-        from PySide6.QtWidgets import QPushButton
+        from PySide6.QtCore import QUrl
 
-        regen = window.findChild(QPushButton, "regenerateButton")
-        assert regen is not None and regen.isEnabled()
-        regen.click()
+        transcript = window._chat_view._transcript
+        assert transcript.retry_label() == "Retry"
+        assert "#retry" in transcript._browser.toHtml()
+        transcript._browser.anchorClicked.emit(QUrl("#retry"))
         _wait_until(
             lambda: not window._chat_view.is_streaming(),
             message="timed out waiting for regenerate",
@@ -560,10 +557,11 @@ def test_caret_hides_when_scrolled_out_of_view() -> None:
     )
     transcript.begin_stream()
     transcript.append_stream("tail")
+    transcript.flush_stream()
     app.processEvents()
     caret = transcript.findChild(QWidget, "streamCaret")
-    assert caret is not None
-    transcript._plain.verticalScrollBar().setValue(0)
+    assert caret is not None and caret.isVisible()
+    transcript._browser.verticalScrollBar().setValue(0)
     app.processEvents()
     assert not caret.isVisible()
     host.close()
@@ -590,8 +588,9 @@ def test_thinking_stream_is_collapsed_and_stored_verbatim():
         )
         for chunk in chunks:
             transcript.append_stream(chunk)
-            assert "Consider each option" not in transcript._plain.toPlainText()
-            assert "<th" not in transcript._plain.toPlainText()
+            transcript.flush_stream()
+            assert "Consider each option" not in transcript._browser.toPlainText()
+            assert "<th" not in transcript._browser.toPlainText()
         assert not transcript._thought_toggle.isHidden()
         assert transcript._thought_text.isHidden()
         transcript._thought_toggle.click()
@@ -619,8 +618,8 @@ def test_cancelled_thinking_remains_available_and_user_tags_are_literal():
     try:
         transcript.set_turns([ChatTurn("user", "What does <think> mean?")])
         transcript.restore_stream("<think>Still working on the problem")
-        assert "What does <think> mean?" in transcript._plain.toPlainText()
-        assert "Still working" not in transcript._plain.toPlainText()
+        assert "What does <think> mean?" in transcript._browser.toPlainText()
+        assert "Still working" not in transcript._browser.toPlainText()
         transcript.keep_stream()
         assert transcript.turns()[-1].content == "<think>Still working on the problem"
         assert "Still working" not in transcript._browser.toPlainText()
@@ -631,3 +630,81 @@ def test_cancelled_thinking_remains_available_and_user_tags_are_literal():
         assert transcript._browser.toPlainText().endswith("A normal answer")
     finally:
         transcript.close()
+
+
+def test_retry_sits_under_the_last_message_in_both_transcript_modes() -> None:
+    _qapp()
+    from PySide6.QtCore import QUrl
+
+    from llm_manager_app.widgets.transcript import Transcript
+
+    transcript = Transcript()
+    requested = []
+    transcript.retry_requested.connect(lambda: requested.append(True))
+    transcript.set_turns([ChatTurn(role="user", content="hi"),
+                          ChatTurn(role="assistant", content="Hello")])
+    transcript.set_retry("Retry")
+    history = transcript._browser.toPlainText()
+    assert history.rstrip().endswith("Retry")
+    assert history.index("Hello") < history.index("Retry")
+    assert not transcript._retry_button.isVisibleTo(transcript)
+    transcript._browser.anchorClicked.emit(QUrl("#retry"))
+    assert requested == [True]
+
+    # While streaming there is nothing to retry yet.
+    transcript.begin_stream()
+    transcript._browser.anchorClicked.emit(QUrl("#retry"))
+    assert requested == [True]
+    assert not transcript._retry_button.isVisibleTo(transcript)
+
+    # An error keeps the plain stream, where a button replaces the link.
+    transcript.append_stream("partial")
+    transcript.keep_stream()
+    assert transcript.is_plain()
+    assert transcript._retry_button.isVisibleTo(transcript)
+    assert transcript._retry_button.text() == "Retry"
+    transcript._retry_button.click()
+    assert requested == [True, True]
+
+    transcript.set_retry(None)
+    assert not transcript._retry_button.isVisibleTo(transcript)
+
+
+def test_streaming_markdown_renders_live_and_replaces_only_the_streaming_turn() -> None:
+    _qapp()
+    from llm_manager_app.widgets.transcript import Transcript
+
+    transcript = Transcript()
+    try:
+        transcript.set_assistant_label("Model")
+        transcript.set_turns([ChatTurn("user", "Question"), ChatTurn("assistant", "Earlier")])
+        transcript.begin_stream()
+        start = transcript._stream_start
+        history = transcript._browser.toPlainText()[:start]
+        for chunk in ("Some **bo", "ld** text", " and a [link](https://example.com)."):
+            transcript.append_stream(chunk)
+            transcript.flush_stream()
+            text = transcript._browser.toPlainText()
+            assert text[:start] == history
+            assert text.count("Model") == 2
+            assert "**" not in text
+        html = transcript._browser.toHtml()
+        assert "font-weight:700" in html or "font-weight:600" in html
+        assert 'href="https://example.com"' in html
+        transcript.finish_stream(parse_markdown=True)
+        assert transcript._browser.toPlainText().rstrip().endswith("Some bold text and a link.")
+    finally:
+        transcript.close()
+
+
+@pytest.mark.parametrize("partial, shown", [
+    ("Some **bo", "Some **bo**"),
+    ("Some **bold** and **mo  ", "Some **bold** and **mo**"),
+    ("Run `pip ins", "Run `pip ins`"),
+    ("```python\nprint(1)", "```python\nprint(1)\n```"),
+    ("Done **bold** here", "Done **bold** here"),
+])
+def test_open_markup_is_closed_for_display_only(partial, shown):
+    from llm_manager_app.widgets.transcript import close_open_markup
+
+    assert close_open_markup(partial) == shown

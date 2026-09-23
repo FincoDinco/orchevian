@@ -95,15 +95,16 @@ def test_renaming_updates_plain_response_without_losing_content(tmp_path, stream
             transcript.keep_stream()
         turns, buffer = transcript.turns(), transcript.buffer()
         names.rename(ref, 'Story helper')
-        assert transcript.is_plain()
+        # Streaming renders markdown live; a kept (stopped) response stays plain.
+        assert transcript.is_plain() is not streaming
         assert transcript.is_streaming() == streaming
         assert transcript.turns() == turns
         assert transcript.buffer() == buffer
-        text = transcript._plain.toPlainText()
+        transcript.flush_stream()
+        text = (transcript._browser if streaming else transcript._plain).toPlainText()
         assert 'Story helper\nOnce upon a time' in text
         assert 'Qwen 3' not in text
         if streaming:
-            assert transcript._plain.textCursor().atEnd()
             transcript.append_stream(', there was a fox.')
             transcript.finish_stream(parse_markdown=True)
             assert 'Story helper' in transcript._browser.toPlainText()

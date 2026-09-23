@@ -17,7 +17,7 @@ from llm_engine.domain.models import (
     LocalModel,
     ModelRef,
 )
-from llm_engine.services.chat import ChatService, title_from
+from llm_engine.services.chat import ChatService, current_date_note, title_from
 from llm_engine.services.session import ModelSession
 from llm_engine.store.library import LibraryService
 from llm_engine.store.sqlite import SqliteStore
@@ -161,7 +161,9 @@ def test_system_prompt_not_stored_as_a_message(library: LibraryService) -> None:
     assert [turn.role for turn in loaded.messages] == ["user", "assistant"]
     assert all(turn.role != "system" for turn in loaded.messages)
     assert fake.prompts
-    assert fake.prompts[0][0] == ChatTurn(role="system", content="You are terse.")
+    assert fake.prompts[0][0] == ChatTurn(
+        role="system", content=current_date_note() + "\n\nYou are terse."
+    )
     assert fake.prompts[0][1].role == "user"
     assert fake.prompts[0][1].content == "Hi there"
 
@@ -179,7 +181,9 @@ def test_project_seed_used_at_generate_time(library: LibraryService) -> None:
     loaded = library.get_conversation(seeded.summary.id)
     assert loaded.system_prompt == "Stay on rails."
     assert [turn.role for turn in loaded.messages] == ["user", "assistant"]
-    assert fake.prompts[0][0] == ChatTurn(role="system", content="Stay on rails.")
+    assert fake.prompts[0][0] == ChatTurn(
+        role="system", content=current_date_note() + "\n\nStay on rails."
+    )
 
 
 def test_retitle_only_on_default_titles(library: LibraryService) -> None:
@@ -451,7 +455,7 @@ def test_set_model_and_system_prompt_during_generate(library: LibraryService) ->
     chat.set_model(cid, other)
     gate.set()
     _wait(rec, chat)
-    assert fake.prompts[0][0].content == "first"
+    assert fake.prompts[0][0].content == current_date_note() + "\n\nfirst"
     loaded = library.get_conversation(cid)
     assert loaded.system_prompt == "next turn"
     assert loaded.summary.model == other

@@ -3,6 +3,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
+from datetime import date
 from email.message import Message
 
 import pytest
@@ -43,7 +44,7 @@ def stack(tmp_path):
         chat = ChatService(library, session)
         calls = []
 
-        def retrieve(query, cancel, progress):
+        def retrieve(query, cancel, progress, focus=None):
             calls.append(query)
             progress("Searching the web…")
             return result()
@@ -115,7 +116,7 @@ def test_retrieval_timestamp_stays_in_evidence_not_model_event_context(stack):
     ("On what date did NASA's Artemis I mission launch?", "Artemis I launch date"),
     ("On what date was Python 3.13.0 released?", "Python 3.13.0 release date"),
     ("Which exact date was Python 3.13.0 released?", "Python 3.13.0 release date"),
-    ("When was Python 3.13.0 released for Windows?", "Python 3.13.0 released Windows"),
+    ("When was Python 3.13.0 released for Windows?", "Python 3.13.0 Windows released"),
     ("Can I use Python 3.13.0?", "Python 3.13.0"),
     ("Find a date calculator", "date calculator"),
 ])
@@ -311,7 +312,7 @@ def test_redirect_cannot_fetch_local_service(monkeypatch):
 
 
 @pytest.mark.parametrize("kwargs,match", [
-    ({"data": b"x" * (web.MAX_BYTES + 1)}, "1 MB"),
+    ({"data": b"x" * (web.MAX_BYTES + 1)}, "3 MB"),
     ({"headers": {"Content-Type": "application/pdf"}}, "HTML or text"),
     ({"status": 429}, "rate-limited"),
     ({"status": 202}, "blocked"),
@@ -546,3 +547,266 @@ def test_date_heavy_pages_still_leave_room_for_the_answer():
     excerpt = web.extract_text(text, "text/plain", FED_QUESTION)
     assert "25 basis points" in excerpt
     assert len(excerpt) <= 2400
+
+
+TRUMP = "Search for what President Trump said today regarding Iran?"
+
+
+@pytest.mark.parametrize("question, earlier, expected", [
+    (TRUMP, [], "President Trump Iran September 22 2026"),
+    ("Specifically today 9/22", [TRUMP], "President Trump Iran September 22"),
+    ("Where are you searching?", [TRUMP, "Specifically today 9/22"],
+     "President Trump Iran September 22 2026"),
+    ("What about yesterday?", [TRUMP], "President Trump Iran September 21 2026"),
+    ("What did he say about the FED decision last week?",
+     ["What did Donald Trump say today at the UN General Assembly?"],
+     "Federal Reserve Donald Trump decision September 2026"),
+    ("What did they decide this month?", ["Did the European Central Bank cut rates?"],
+     "European Central Bank decide September 2026"),
+    ("I fed the cat today, is that enough?", [], "fed cat enough September 22 2026"),
+    ("What is the weather in Paris today?", [], "Paris weather September 22 2026"),
+    # A follow-up that names its own subject never borrows the earlier one.
+    ("What is the weather in Paris today?", [TRUMP], "Paris weather September 22 2026"),
+])
+def test_follow_ups_keep_the_earlier_subject_and_dates_are_spelled(question, earlier, expected):
+    query = web.search_query(web.resolve_follow_up(question, earlier), today=date(2026, 9, 22))
+    assert query == expected
+
+
+def test_chat_search_resolves_follow_ups_and_names_the_provider(stack):
+    store, library, chat, backend, cid, calls = stack
+    focuses = []
+    chat.web.retriever = lambda query, cancel, progress, focus=None: (
+        calls.append(query) or focuses.append(focus)
+        or {**result(), "provider": "Bing public web search"}
+    )
+    chat.send(cid, TRUMP, web_search=True)
+    join(chat)
+    chat.send(cid, "Specifically today 9/22", web_search=True)
+    join(chat)
+    assert calls[0] == TRUMP
+    assert "Trump" in calls[1] and "9/22" in calls[1]
+    assert focuses == [None, "Specifically today 9/22"]
+    assert chat.web.history(cid)[0]["provider"] == "Bing public web search"
+    prompt = backend.prompts[-1][0].content
+    assert "excerpts from Bing public web search" in prompt
+
+
+def test_every_chat_tells_the_model_todays_date(stack):
+    store, library, chat, backend, cid, calls = stack
+    chat.today = lambda: date(2026, 9, 22)
+    chat.set_system_prompt(cid, "You are terse.")
+    chat.send(cid, "What happened today?")
+    join(chat)
+    system = backend.prompts[-1][0]
+    assert system.role == "system"
+    assert system.content.startswith("Today's date is Tuesday, September 22, 2026.")
+    assert system.content.endswith("You are terse.")
+    chat.send(cid, "And with search?", web_search=True)
+    join(chat)
+    turns = backend.prompts[-1]
+    assert [turn.role for turn in turns].count("system") == 1
+    assert "September 22, 2026" in turns[0].content and "untrusted" in turns[0].content
+    private = chat.create_private(backend.list_models()[0].ref).summary.id
+    chat.send(private, "What day is it?")
+    join(chat)
+    assert backend.prompts[-1][0].content.startswith("Today's date is Tuesday")
+
+
+def test_borrowed_subject_alone_does_not_make_a_page_relevant():
+    class Provider:
+        def search(self, query):
+            return [web.SearchHit("Donald Trump official site", "https://example.com/bio"),
+                    web.SearchHit("Donald Trump on the Federal Reserve", "https://example.com/fed")]
+
+    pages = {"https://example.com/bio": "Donald Trump biography and campaign news.",
+             "https://example.com/fed": "Donald Trump criticized the Federal Reserve decision."}
+    found = web.retrieve("Donald Trump What did he say about the Fed decision?", Provider(),
+                         lambda url: (url, pages[url], "text/plain"), threading.Event(),
+                         lambda _: None, focus="What did he say about the Fed decision?")
+    assert [source["url"] for source in found["sources"]] == ["https://example.com/fed"]
+
+
+def test_bing_web_and_news_results_alternate_without_duplicates(monkeypatch):
+    news = '''<div class="news-card newsitem cardcommon"
+        url="https://news.example/fed-hike" data-title="Trump reacts to Federal Reserve hike"
+        data-author="Example News"></div>
+        <div class="news-card newsitem cardcommon" url="http://localhost/x"
+        data-title="bad"></div>'''
+    web_page = '''<li class="b_algo"><h2><a href="https://web.example/fed">Fed page</a></h2></li>
+        <li class="b_algo"><h2><a href="https://news.example/fed-hike">Duplicate</a></h2></li>'''
+    requested = []
+
+    def fetch(url):
+        requested.append(url)
+        return url, news if "/news/" in url else web_page, "text/html"
+
+    monkeypatch.setattr(web, "fetch_public", fetch)
+    hits = web.BingProvider().search("Federal Reserve Trump")
+    assert [hit.url for hit in hits] == ["https://web.example/fed", "https://news.example/fed-hike"]
+    assert hits[1].title == "Trump reacts to Federal Reserve hike"
+
+    def news_blocked(url):
+        if "/news/" in url:
+            raise EngineError("web_failed", "blocked")
+        return url, web_page, "text/html"
+
+    monkeypatch.setattr(web, "fetch_public", news_blocked)
+    assert [hit.url for hit in web.BingProvider().search("q")][0] == "https://web.example/fed"
+
+
+@pytest.mark.parametrize("question, earlier, expected", [
+    ("What did donald trump say about FED rates?", [], "Federal Reserve donald trump rates"),
+    ("I was curious about what he said about the FED's decision last week",
+     ["What did donald trump say about FED rates?"],
+     "Federal Reserve decision September 2026 donald trump rates"),
+])
+def test_acronym_topic_leads_and_filler_is_dropped(question, earlier, expected):
+    query = web.search_query(web.resolve_follow_up(question, earlier), today=date(2026, 9, 22))
+    assert query == expected
+
+
+def test_pages_must_mention_every_named_subject():
+    class Provider:
+        def search(self, query):
+            return [web.SearchHit("Trump economy", "https://example.com/economy"),
+                    web.SearchHit("Trump and the Fed", "https://example.com/fed")]
+
+    pages = {"https://example.com/economy": "Donald Trump rates his economy and tax cuts.",
+             "https://example.com/fed": "Donald Trump criticized the Fed on rates."}
+    found = web.retrieve("What did donald trump say about FED rates?", Provider(),
+                         lambda url: (url, pages[url], "text/plain"), threading.Event(),
+                         lambda _: None)
+    assert [source["url"] for source in found["sources"]] == ["https://example.com/fed"]
+
+
+SERVICE_RESPONSES = {
+    "tavily": {"results": [{"title": "Fed hike", "url": "https://a.example/fed",
+                            "raw_content": "Trump criticized the Federal Reserve."}]},
+    "exa": {"results": [{"title": "Fed hike", "url": "https://a.example/fed",
+                         "text": "Trump criticized the Federal Reserve."}]},
+    "serper": {"organic": [{"title": "Fed hike", "link": "https://a.example/fed",
+                            "snippet": "short"}]},
+    "brave": {"web": {"results": [{"title": "Fed hike", "url": "https://a.example/fed"}]}},
+}
+
+
+@pytest.mark.parametrize("service", [s.id for s in web.SEARCH_SERVICES])
+def test_each_search_service_parses_results_and_explains_key_problems(monkeypatch, service):
+    calls = []
+
+    def respond(status, body):
+        def request(method, url, headers, payload=None):
+            calls.append((method, url, headers, payload))
+            return status, body
+        monkeypatch.setattr(web, "_request_json", request)
+
+    provider = web._SERVICES[service].provider(" secret-key ")
+    respond(200, SERVICE_RESPONSES[service])
+    hits = provider.search("Federal Reserve Trump")
+    assert [hit.url for hit in hits] == ["https://a.example/fed"]
+    # Tavily and Exa send page text; Serper and Brave pages are read like Bing's.
+    assert bool(hits[0].content) == (service in {"tavily", "exa"})
+    method, url, headers, _ = calls[-1]
+    assert url.startswith("https://") and "secret-key" not in url
+    assert "secret-key" in " ".join(headers.values())
+
+    respond(401, {})
+    with pytest.raises(EngineError, match="did not accept your API key"):
+        provider.search("q")
+    respond(402, {})
+    with pytest.raises(EngineError, match="used up"):
+        provider.search("q")
+
+
+def test_keyed_search_tries_services_in_order_then_falls_back_to_bing(monkeypatch):
+    def request(method, url, headers, payload=None):
+        if "tavily" in url:
+            return 432, {}
+        return 200, SERVICE_RESPONSES["exa"]
+
+    monkeypatch.setattr(web, "_request_json", request)
+    search = web.KeyedSearch([("tavily", "a"), ("exa", "b")])
+    assert [hit.url for hit in search.search("q")] == ["https://a.example/fed"]
+    assert search.name == "Exa" and "Tavily searches are used up" in search.notice
+
+    monkeypatch.setattr(web, "_request_json", lambda *a, **k: (401, {}))
+    monkeypatch.setattr(web.BingProvider, "search",
+                        lambda self, q: [web.SearchHit("Bing", "https://b.example/")])
+    search = web.KeyedSearch([("tavily", "a")])
+    assert search.search("q")[0].url == "https://b.example/"
+    assert search.name == web.BingProvider.name and search.notice.endswith("Used Bing instead.")
+
+
+def test_key_check_reports_plainly(monkeypatch):
+    monkeypatch.setattr(web, "_request_json", lambda *a, **k: (200, SERVICE_RESPONSES["tavily"]))
+    assert web.check_search_key("tavily", "good") == ""
+    assert web.check_search_key("tavily", "  ") == "Paste a key first."
+    monkeypatch.setattr(web, "_request_json", lambda *a, **k: (401, {}))
+    assert "did not accept" in web.check_search_key("tavily", "bad")
+
+
+def test_provider_text_is_used_without_fetching_and_notice_reaches_warning():
+    class Provider:
+        name = "Tavily"
+        notice = "Your free Exa searches are used up."
+
+        def search(self, query):
+            return [web.SearchHit("Launch", "https://example.com/", "Launch is Friday.")]
+
+    found = web.retrieve("launch", Provider(), lambda url: pytest.fail("fetched"),
+                         threading.Event(), lambda _: None)
+    assert found["provider"] == "Tavily"
+    assert found["warning"].startswith("Your free Exa searches are used up.")
+
+
+EXA_FREE_TEXT = (
+    "Title: Trump blames Fed board for rate hike\nURL: https://news.example/fed\n"
+    "Published: 2026-09-16T23:11:22.000Z\nAuthor: N/A\nHighlights:\n"
+    "Trump said the Federal Reserve board is very hostile.\n\n---\n\n"
+    "Title: Bad\nURL: http://localhost/x\nHighlights:\nnope"
+)
+
+
+def test_free_exa_needs_no_key_and_parses_highlights(monkeypatch):
+    calls = []
+
+    def request(method, url, headers, payload=None):
+        calls.append((url, headers, payload))
+        return 200, {"result": {"content": [{"type": "text", "text": EXA_FREE_TEXT}]}}
+
+    monkeypatch.setattr(web, "_request_json", request)
+    hits = web.ExaFreeProvider().search("What did Trump say about the Fed?")
+    assert [hit.url for hit in hits] == ["https://news.example/fed"]
+    assert hits[0].content.startswith("Published 2026-09-16\n")
+    assert "very hostile" in hits[0].content
+    url, headers, payload = calls[-1]
+    assert url == "https://mcp.exa.ai/mcp"
+    assert not any("key" in name.lower() for name in headers)
+    assert payload["params"]["name"] == "web_search_exa"
+
+    monkeypatch.setattr(web, "_request_json", lambda *a, **k: (429, {}))
+    with pytest.raises(EngineError, match="busy or at its limit"):
+        web.ExaFreeProvider().search("q")
+
+
+def test_default_chain_is_free_exa_with_the_question_then_bing(monkeypatch):
+    asked = []
+
+    def request(method, url, headers, payload=None):
+        asked.append(payload["params"]["arguments"]["query"])
+        return 200, {"result": {"content": [{"type": "text", "text": EXA_FREE_TEXT}]}}
+
+    monkeypatch.setattr(web, "_request_json", request)
+    chain = web.SearchChain()
+    assert chain.name == "Exa (free)"
+    hits = chain.search("Federal Reserve Trump", question="What did Trump say about the Fed?")
+    assert asked == ["What did Trump say about the Fed?"] and hits
+
+    monkeypatch.setattr(web, "_request_json", lambda *a, **k: (500, {}))
+    monkeypatch.setattr(web.BingProvider, "search",
+                        lambda self, q: [web.SearchHit("Bing", "https://b.example/")])
+    chain = web.SearchChain()
+    assert chain.search("q")[0].url == "https://b.example/"
+    assert chain.name == web.BingProvider.name
+    assert "Exa's free search did not answer. Used Bing instead." == chain.notice

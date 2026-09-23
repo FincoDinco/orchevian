@@ -705,7 +705,7 @@ flowchart TB
 | --- | --- |
 | Sidebar | `QListView` or `QTreeView` (projects as nodes). Not a custom-painted rail-as-everything. |
 | Conversation list | `QListView` + model of `ConversationSummary` |
-| Transcript | custom widget or `QTextBrowser` **after** `done`; during stream `QPlainTextEdit` (plain text + caret) |
+| Transcript | `QTextBrowser` with markdown rendered live while streaming (throttled, streaming turn replaced in place) plus caret; `QPlainTextEdit` keeps a partial response after an error or stop |
 | Composer | `QPlainTextEdit`, 40–140px, wrap |
 | Model picker | `QToolButton` + `QMenu` grouped by backend |
 | Settings | separate `QDialog` / `QMainWindow` |
@@ -764,7 +764,9 @@ Type: system UI font (`.AppleSystemUIFont` / Segoe UI / system); SF Mono / Conso
 
 Layout: default 1280×800, min 1024×680. Reading container capped at 820px with adaptive outer space. Radii 12px controls, 26px composer; send button 34px. Primary and secondary text have at least 4.5:1 contrast against the main surfaces in both themes.
 
-**Streaming caret:** 2×14px accent rect at the end of the assistant buffer; pulse unless the OS reduce-motion hint is set. During the turn: plain text. On `done`: markdown via the `markdown` package into `QTextBrowser` (fenced code on `elevated`). Do not rebuild HTML every 80ms. Do not use nested `<table>` bubbles.
+**Motion and feel (September 22, 2026):** Apple-style restraint. Frequent and keyboard-driven actions (sidebar toggle, inspector, section switches, shortcuts) stay instant. `llm_manager_app/motion.py` holds the shared ease-out curve (`cubic-bezier(0.23, 1, 0.32, 1)`), 160 ms enter / 110 ms exit durations, and a `fade()` helper that starts from the current opacity. Only occasional, spatial moments animate: the downloads popover fades in (closing stays instant) and the activity pill appears after 300 ms of work so near-instant operations never flash it, then fades; a stop request shows it at once. Reduced motion reads the OS setting (macOS `NSWorkspace.accessibilityDisplayShouldReduceMotion`, Windows client-area animation) and makes every fade instant; the spinner becomes a steady dot. The spinner's angle comes from elapsed time at display rate. Every pressable control darkens on press; hover is quieter than selection; checkboxes are rounded and accent-filled; status notices are neutral and errors use a soft danger tint. Routine attachment explanations live in tooltips.
+
+**Streaming caret:** 2×14px accent rect at the end of the assistant buffer; pulse unless the OS reduce-motion hint is set. During the turn, markdown renders live via the `markdown` package into `QTextBrowser` (fenced code on `elevated`): tokens are batched for 80 ms and only the streaming turn is replaced in place, so a redraw costs ~2 ms regardless of chat length (rebuilding all history took ~60 ms at 60 turns). Do not rebuild the whole history per tick. Do not use nested `<table>` bubbles.
 
 ---
 
@@ -1134,13 +1136,14 @@ an output file exists.
 Working-tree status (September 17): engine-owned search/page retrieval, the shared
 composer toggle, per-draft choice and project transfer, explicit regeneration
 state, progress/stop, and retained linked source excerpts are implemented. The
-provider is Bing public HTML search. Per the September 17 distribution requirement,
-there is no API, key, subscription, user account, or hosted Orchevian backend.
+provider is Bing public HTML search (web plus news results, interleaved). Per the
+September 17 distribution requirement, there is no required API, key, subscription, user
+account, or hosted Orchevian backend. By default search uses Exa's free keyless search (its hosted MCP endpoint, one stateless call; Exa documents free rate-limited use without a key), and Bing when Exa is busy or at its limit. Optionally, each person can add their own key for Exa, Serper, Tavily or Brave Search in Settings → Web Search (Tavily and Brave need a card on file); keys are tried in that order, then free Exa, then Bing. Keys are the user's own (no shared developer credential), are stored in the app's local settings file, and are sent only to that service.
 Only a focused query built from the current message (capped at 500 characters)
-goes to the provider. Conversational filler is removed, and simple recent Fed-rate
+goes to the provider. A follow-up with no subject of its own (such as "Specifically today 9/22") borrows the subject of one of the three previous questions in that chat. Every chat's system prompt starts with the local calendar date so the model reads 'today' and dated sources correctly; the stateless local API is unchanged. Conversational filler is removed, and simple recent Fed-rate
 questions expand to a neutral dated Federal Reserve decision search. A
 disposable reader enforces a 45-second deadline, public DNS/IP/redirect checks,
-1 MB pages, at most three readable pages, and 8,000 characters of source context.
+3 MB pages, at most three readable pages, and 8,000 characters of source context.
 Regular evidence is stored per user turn in migration 007; regeneration replaces
 it. Private evidence remains in memory and cannot be recreated after clearing.
 Sources, failure/empty-result behavior, cancellation, provider configuration and
@@ -1422,7 +1425,7 @@ Each PR is independently reviewable and mergeable. First PRs are engine + data, 
 - **Title:** `feat(app): streaming chat`
 - **Files:** `src/llm_manager_app/{workers.py,widgets/chat_view.py,widgets/composer.py,widgets/transcript.py}`
 - **Depends on:** PR 9a, PR 5
-- **Description:** QThread adapter. Composer Return-sends 40–140px. Plain text + caret while streaming; markdown on `done`. Stop (Escape), regenerate. On `error`: keep buffer, banner, no `done`. First daily-driver milestone on Ollama. Qt main thread must not call `stream_generate`.
+- **Description:** QThread adapter. Composer Return-sends 40–140px. Live markdown + caret while streaming; plain text kept only after an error or stop. Stop (Escape), regenerate. On `error`: keep buffer, banner, no `done`. First daily-driver milestone on Ollama. Qt main thread must not call `stream_generate`.
 
 ### PR 9c — Model picker + empty states
 

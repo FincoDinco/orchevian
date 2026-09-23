@@ -1,4 +1,4 @@
-"""Transcript: plain text + caret while streaming; markdown only after done."""
+"""Transcript: markdown rendered live while streaming (throttled); plain text kept after errors."""
 
 from __future__ import annotations
 
@@ -6,14 +6,16 @@ import html
 import re
 from collections.abc import Sequence
 
-from PySide6.QtCore import QEvent, QObject, QRect, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QRect, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
-    QGuiApplication,
+    QIcon,
     QPainter,
     QPaintEvent,
+    QTextBlockFormat,
     QTextCursor,
+    QTextDocument,
 )
 from PySide6.QtWidgets import (
     QFrame,
@@ -26,10 +28,14 @@ from PySide6.QtWidgets import (
 )
 
 from llm_engine.domain.models import ChatTurn
+from llm_manager_app.icons import icon
+from llm_manager_app.motion import prefers_reduced_motion
 from llm_manager_app.tokens import current_palette, mono_font_family, system_font_family
 
 _CARET_W = 2
 _CARET_H = 14
+# Re-render streamed markdown at most this often; tokens in between are batched.
+_STREAM_RENDER_MS = 80
 
 
 _PRE = re.compile(r"<pre>(.*?)</pre>", re.DOTALL)
@@ -76,11 +82,21 @@ def _markdown(text: str) -> str:
     return _flatten_pre(markdown.markdown(text, extensions=["fenced_code", "nl2br", "sane_lists"]))
 
 
-def prefers_reduced_motion() -> bool:
-    app = QGuiApplication.instance()
-    if app is None:
-        return False
-    return app.styleHints().cursorFlashTime() <= 0
+def close_open_markup(text: str) -> str:
+    """Close markdown left open mid-stream so '**bo' shows bold, not asterisks.
+
+    Display only: the stored response is never changed.
+    """
+    if text.count("```") % 2:
+        return text + "\n```"
+    outside = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    if outside.count("`") % 2:
+        return text + "`"
+    if outside.count("**") % 2:
+        text = text.rstrip() + "**"
+    return text
+
+
 
 
 class StreamCaret(QWidget):
@@ -123,9 +139,15 @@ class StreamCaret(QWidget):
 
 
 class Transcript(QWidget):
+    retry_requested = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("transcript")
+        # Retry sits under the last message: a link in rendered history, or a
+        # button below the plain view kept after an error or unload.
+        self._retry_label: str | None = None
+        self._stream_start = 0
         self._turns: list[ChatTurn] = []
         self._buffer = ""
         self._streaming = False
@@ -149,10 +171,14 @@ class Transcript(QWidget):
         self._plain.setFrameShape(QFrame.Shape.NoFrame)
         self._plain.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._plain.document().setDocumentMargin(12)
-        self._plain.updateRequest.connect(self._on_plain_update)
 
-        self._caret = StreamCaret(self._plain.viewport())
-        self._plain.viewport().installEventFilter(self)
+        self._caret = StreamCaret(self._browser.viewport())
+        self._browser.viewport().installEventFilter(self)
+        self._browser.verticalScrollBar().valueChanged.connect(self._place_caret)
+        self._stream_timer = QTimer(self)
+        self._stream_timer.setSingleShot(True)
+        self._stream_timer.setInterval(_STREAM_RENDER_MS)
+        self._stream_timer.timeout.connect(self._render_stream)
 
         self._stack = QStackedWidget(self)
         self._stack.addWidget(self._browser)
@@ -165,7 +191,9 @@ class Transcript(QWidget):
         self._thought_toggle.setObjectName("thinkingDisclosure")
         self._thought_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._thought_toggle.setCheckable(True)
-        self._thought_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        # A thin chevron, as macOS disclosures use, rather than a solid triangle.
+        self._thought_toggle.setIcon(icon("chevron-right"))
+        self._thought_toggle.setIconSize(QSize(12, 12))
         self._thought_toggle.toggled.connect(self._toggle_thinking)
         self._thought_toggle.hide()
         layout.addWidget(self._thought_toggle, 0, Qt.AlignmentFlag.AlignLeft)
@@ -176,11 +204,20 @@ class Transcript(QWidget):
         self._thought_text.setMaximumHeight(150)
         self._thought_text.hide()
         layout.addWidget(self._thought_text)
+        self._retry_button = QToolButton(self)
+        self._retry_button.setObjectName("retryResponseButton")
+        self._retry_button.setIcon(icon("refresh"))
+        self._retry_button.setIconSize(QSize(14, 14))
+        self._retry_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._retry_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._retry_button.clicked.connect(self.retry_requested)
+        self._retry_button.hide()
+        layout.addWidget(self._retry_button, 0, Qt.AlignmentFlag.AlignLeft)
 
         self._render_html()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if watched is self._plain.viewport() and event.type() == QEvent.Type.Resize:
+        if watched is self._browser.viewport() and event.type() == QEvent.Type.Resize:
             self._place_caret()
         return super().eventFilter(watched, event)
 
@@ -202,15 +239,29 @@ class Transcript(QWidget):
             self._assistant_label = label
             if self.is_plain():
                 scroll = self._plain.verticalScrollBar().value()
-                self._plain.setPlainText(self._dump_plain(with_buffer=self._streaming))
-                if self._streaming:
-                    cursor = self._plain.textCursor()
-                    cursor.movePosition(QTextCursor.MoveOperation.End)
-                    self._plain.setTextCursor(cursor)
+                self._plain.setPlainText(self._dump_plain(with_buffer=False))
                 self._plain.verticalScrollBar().setValue(scroll)
-                self._place_caret()
             else:
                 self._render_html(preserve_scroll=True)
+                self._place_caret()
+
+    def set_retry(self, label: str | None) -> None:
+        """Offer Retry under the last message with this label, or hide it (None)."""
+        if label == self._retry_label:
+            return
+        self._retry_label = label
+        self._sync_retry_button()
+        if not self.is_plain():
+            self._render_html(preserve_scroll=True)
+
+    def retry_label(self) -> str | None:
+        return self._retry_label
+
+    def _sync_retry_button(self) -> None:
+        label = self._retry_label
+        self._retry_button.setText(label or "")
+        self._retry_button.setAccessibleName(label or "")
+        self._retry_button.setVisible(label is not None and self.is_plain() and not self._streaming)
 
     def refresh_theme(self) -> None:
         if self.is_plain():
@@ -221,6 +272,7 @@ class Transcript(QWidget):
         self._turns = list(turns)
         self._buffer = ""
         self._streaming = False
+        self._stream_timer.stop()
         self._plain_locked = False
         self._caret.stop()
         self._expanded_thoughts.clear()
@@ -228,6 +280,7 @@ class Transcript(QWidget):
         self._sync_thinking()
         self._render_html()
         self._stack.setCurrentWidget(self._browser)
+        self._sync_retry_button()
 
     def clear(self) -> None:
         self.set_turns(())
@@ -243,6 +296,7 @@ class Transcript(QWidget):
     def revert_stream(self, *, restore_user: bool = False, restore: ChatTurn | None = None) -> None:
         self._buffer = ""
         self._streaming = False
+        self._stream_timer.stop()
         self._plain_locked = False
         self._caret.stop()
         self._sync_thinking()
@@ -252,45 +306,81 @@ class Transcript(QWidget):
             self._turns.append(restore)
         self._render_html()
         self._stack.setCurrentWidget(self._browser)
+        self._sync_retry_button()
 
     def begin_stream(self) -> None:
-        self._buffer = ""
-        self._streaming = True
-        self._plain_locked = False
         self._thought_toggle.setChecked(False)
-        self._sync_thinking()
-        self._plain.setPlainText(self._dump_plain(with_buffer=True))
-        self._stack.setCurrentWidget(self._plain)
-        self._place_caret()
-        self._caret.start()
-        self._plain.ensureCursorVisible()
+        self.restore_stream("")
 
     def restore_stream(self, buffer: str) -> None:
         self._buffer = buffer
         self._streaming = True
         self._plain_locked = False
         self._sync_thinking()
-        self._plain.setPlainText(self._dump_plain(with_buffer=True))
-        self._stack.setCurrentWidget(self._plain)
-        self._place_caret()
+        self._stream_timer.stop()
+        self._render_html()
+        self._stack.setCurrentWidget(self._browser)
         self._caret.start()
-        self._plain.ensureCursorVisible()
+        self._place_caret()
+        self._sync_retry_button()
 
     def append_stream(self, text: str) -> None:
         if not text:
             return
         self._buffer += text
         self._sync_thinking()
-        visible = self._dump_plain(with_buffer=True)
-        if visible != self._plain.toPlainText():
-            self._plain.setPlainText(visible)
-            cursor = self._plain.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            self._plain.setTextCursor(cursor)
+        # Batch tokens: rendering markdown per token would stall long answers.
+        if not self._stream_timer.isActive():
+            self._stream_timer.start()
+
+    def flush_stream(self) -> None:
+        """Render any tokens still waiting for the throttle timer."""
+        if self._stream_timer.isActive():
+            self._stream_timer.stop()
+            self._render_stream()
+
+    def _render_stream(self) -> None:
+        if not self._streaming:
+            return
+        bar = self._browser.verticalScrollBar()
+        # Follow the answer only while the reader is at the bottom.
+        following = bar.value() >= bar.maximum() - 24
+        scroll = bar.value()
+        # Replace only the streaming turn: re-laying out the whole history every
+        # tick cost ~60 ms in a 60-turn chat.
+        cursor = QTextCursor(self._browser.document())
+        cursor.setPosition(self._stream_start)
+        cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+        self._insert_stream(cursor)
+        if following:
+            self._scroll_browser_to_end()
+        else:
+            bar.setValue(scroll)
         self._place_caret()
-        self._plain.ensureCursorVisible()
+
+    def _insert_stream(self, cursor: QTextCursor) -> None:
+        cursor.insertHtml(self._stream_html())
+        # The label merges into the anchor paragraph, which drops the .role
+        # margins; restore them so live and finished turns line up.
+        label = QTextCursor(self._browser.document())
+        label.setPosition(self._stream_start)
+        spacing = label.blockFormat()
+        spacing.setTopMargin(24)
+        spacing.setBottomMargin(10)
+        spacing.setLineHeight(150, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+        label.setBlockFormat(spacing)
+
+    def _stream_html(self) -> str:
+        # Partial markdown renders as it arrives; thinking stays in the disclosure.
+        _, answer, _ = split_thinking(self._buffer, streaming=True)
+        answer = close_open_markup(answer)
+        return (
+            f'{self._html_head()}<p class="role">{html.escape(self._assistant_label)}</p>'
+            f"{_markdown(answer)}</body></html>"
+        )
 
     def finish_stream(self, *, parse_markdown: bool) -> None:
+        self._stream_timer.stop()
         if self._buffer:
             self._turns.append(ChatTurn(role="assistant", content=self._buffer))
         self._buffer = ""
@@ -303,10 +393,12 @@ class Transcript(QWidget):
             self._plain_locked = False
             self._render_html()
             self._stack.setCurrentWidget(self._browser)
+            self._sync_retry_button()
             return
         self._plain_locked = True
         self._plain.setPlainText(self._dump_plain(with_buffer=False))
         self._stack.setCurrentWidget(self._plain)
+        self._sync_retry_button()
 
     def keep_stream(self) -> None:
         self.finish_stream(parse_markdown=False)
@@ -343,14 +435,15 @@ class Transcript(QWidget):
             self._thought_text.setPlainText(thinking)
 
     def _toggle_thinking(self, expanded: bool) -> None:
-        self._thought_toggle.setArrowType(
-            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
-        )
+        self._thought_toggle.setIcon(icon("chevron-down" if expanded else "chevron-right"))
         self._sync_thinking()
 
     def _open_link(self, url) -> None:
         fragment = url.fragment()
-        if re.fullmatch(r"thinking-\d+", fragment) and not url.scheme():
+        if fragment == "retry" and not url.scheme():
+            if self._retry_label is not None and not self._streaming:
+                self.retry_requested.emit()
+        elif re.fullmatch(r"thinking-\d+", fragment) and not url.scheme():
             index = int(fragment.split("-")[1])
             if index in self._expanded_thoughts:
                 self._expanded_thoughts.remove(index)
@@ -360,20 +453,17 @@ class Transcript(QWidget):
         elif url.scheme() in {"https", "http", "mailto"}:
             QDesktopServices.openUrl(url)
 
-    def _on_plain_update(self, _rect: QRect, _dy: int) -> None:
-        self._place_caret()
-
-    def _place_caret(self) -> None:
-        if not self._streaming or self._reasoning_active:
+    def _place_caret(self, *_args) -> None:
+        if not self._streaming or self._reasoning_active or self.is_plain():
             self._caret.hide()
             return
-        cursor = self._plain.textCursor()
+        cursor = QTextCursor(self._browser.document())
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        rect = self._plain.cursorRect(cursor)
+        rect = self._browser.cursorRect(cursor)
         y = rect.y() + max(0, (rect.height() - _CARET_H) // 2)
         x = rect.x() + 1
         caret_rect = QRect(x, y, _CARET_W, _CARET_H)
-        if not self._plain.viewport().rect().intersects(caret_rect):
+        if not self._browser.viewport().rect().intersects(caret_rect):
             self._caret.hide()
             return
         self._caret.move(x, y)
@@ -388,8 +478,7 @@ class Transcript(QWidget):
         bar = self._browser.verticalScrollBar()
         bar.setValue(bar.maximum())
 
-    def _render_html(self, *, preserve_scroll: bool = False) -> None:
-        scroll = self._browser.verticalScrollBar().value()
+    def _html_head(self) -> str:
         palette = current_palette()
         family = system_font_family()
         mono = mono_font_family()
@@ -403,11 +492,18 @@ class Transcript(QWidget):
             "p { margin: 0 0 14px 0; line-height: 150%; }",
             "h1, h2, h3 { margin: 22px 0 12px 0; font-size: 17px; }",
             f"a {{ color: {palette.accent}; }}",
+            f"a.action {{ color: {palette.secondary}; text-decoration: none; }}",
+            "p.actions { margin: -6px 0 0 0; font-size: 13px; }",
             f".role {{ color: {palette.secondary}; font-size: 12px; font-weight: 600; "
             "margin: 24px 0 10px 0; }",
             ".turn { margin: 0 0 20px 0; }",
             "</style></head><body>",
         ]
+        return "".join(parts)
+
+    def _render_html(self, *, preserve_scroll: bool = False) -> None:
+        scroll = self._browser.verticalScrollBar().value()
+        parts = [self._html_head()]
         for index, turn in enumerate(self._turns):
             role_class = html.escape(turn.role)
             label = html.escape(self._role_label(turn.role))
@@ -428,10 +524,39 @@ class Transcript(QWidget):
             parts.append(
                 f'<div class="turn {role_class}"><p class="role">{label}</p>{body}</div>'
             )
+        if self._streaming:
+            # Anchor for the streaming turn, which _render_stream replaces in place.
+            parts.append('<p class="role"></p>')
+        retry = self._retry_label is not None and bool(self._turns) and not self._streaming
+        if retry:
+            parts.append(
+                '<p class="actions"><a class="action" href="#retry">'
+                '<img src="icon:refresh" width="14" height="14" align="middle">'
+                f"&nbsp;{html.escape(self._retry_label)}</a></p>"
+            )
         parts.append("</body></html>")
         self._browser.setHtml("".join(parts))
+        if self._streaming:
+            cursor = QTextCursor(self._browser.document())
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self._stream_start = cursor.block().position()
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+            self._insert_stream(cursor)
+        if retry:
+            # After setHtml, which resets the document; images load on layout.
+            self._add_icon_resource("refresh")
         if preserve_scroll:
             self._browser.verticalScrollBar().setValue(scroll)
         else:
             self._scroll_browser_to_end()
             QTimer.singleShot(0, self._scroll_browser_to_end)
+
+    def _add_icon_resource(self, name: str) -> None:
+        ratio = max(1.0, self.devicePixelRatioF())
+        side = round(14 * ratio)
+        # Disabled mode draws in the secondary text color, matching the link.
+        pixmap = icon(name).pixmap(QSize(side, side), QIcon.Mode.Disabled)
+        pixmap.setDevicePixelRatio(ratio)
+        self._browser.document().addResource(
+            QTextDocument.ResourceType.ImageResource, QUrl(f"icon:{name}"), pixmap
+        )

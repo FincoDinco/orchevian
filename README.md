@@ -162,26 +162,42 @@ Chat document uploads, text reading, shared project files, a document/artifact c
 
 Turn on **Web search** below the message field to search before the local model
 answers. It starts off. The choice stays with each chat or project-home draft;
-starting a project chat carries the choice over. **Regenerate · Web on/off** shows
-which choice will apply to regeneration. New private sessions start off.
+starting a project chat carries the choice over. **Retry** under the last message
+uses the same choice and reads **Retry with web search** when it is on. New private
+sessions start off.
 
 Search builds a focused query from the first 500 characters of the current message,
 then reads up to three relevant public result pages. Conversational filler is
 removed; simple recent Fed-rate questions become dated Federal Reserve decision
 searches without assuming rates went up or down. Explicit dates and comparisons
-are preserved. It does not send attachments, project
-files, guidance, memories, or earlier messages. Inference stays local. The toggle's
+are preserved; "9/22" becomes "September 22", and "today" or "yesterday" adds the
+calendar date. A follow-up with no subject of its own, such as "Specifically today
+9/22", borrows the subject of one of your previous three questions in that chat. It
+does not send attachments, project files, guidance, memories, or other earlier messages.
+Every chat also tells the model today's date, so "today" means the same thing to it as
+it does to you. Inference stays local. The toggle's
 tooltip names the provider. Search-off makes no search or page-reading requests.
 
-The provider is [Bing's public web search](https://www.microsoft.com/en-us/bing/features/web-search/).
-The app reads the public HTML results directly: no API, account, key, subscription,
-shared developer credential, or hosted Orchevian backend is required. Provider
-blocks and changes to the results page remain possible; the app reports them
+By default search uses [Exa's free keyless search](https://exa.ai/docs/reference/exa-mcp),
+which returns page highlights directly, so it also covers pages that need JavaScript, such
+as weather forecasts. If Exa is busy or at its free limit, the app falls back to
+[Bing's public web search](https://www.microsoft.com/en-us/bing/features/web-search/),
+reading public HTML results and Bing News. No API, account, key, subscription, shared
+developer credential, or hosted Orchevian backend is required.
+Provider blocks and changes to the results page remain possible; the app reports them
 without bypassing challenges or pretending it retrieved sources.
+
+**Optional: a bigger allowance with your own free key.** Exa's free search has a daily
+limit. Heavy users can open **Settings → Web Search**, which explains each step: pick a
+service (Exa is the easiest start: free monthly credits, no credit card), click **Get a free
+key**, create an account, copy the key, paste it in and click **Test**. Serper also has a free
+start without a card; Tavily and Brave Search need a card on file. With several keys,
+Orchevian tries them top to bottom, then Exa's free search, then Bing; **Web sources** says which service answered and why any was skipped. Your key
+stays in Orchevian's settings on this computer and is only sent to that service.
 
 Search and reading progress appear above the composer. **Stop** cancels the reader
 process, including blocked network/DNS calls. The whole retrieval has a 45-second
-deadline, each network operation an 8-second timeout, and each page a 1 MB limit.
+deadline, each network operation an 8-second timeout, and each page a 3 MB limit.
 Connecting to a site shares one 8-second budget across all of its addresses, and
 further results from a site that timed out are skipped.
 Only public HTTP(S) HTML/text pages are read; redirects and resolved addresses are
@@ -331,7 +347,7 @@ GitHub Actions runs lint and tests on Ubuntu, Windows, and macOS with Python 3.1
 
 ## Stopping a stuck model
 
-Select **Cancel loading** in the model library, or use the **Force stop** button in the workspace header beside the activity label and elapsed time while a model is working. It remains available when you switch workspaces. **Escape** stops the current load, chat response, or memory capture; **Ctrl/⌘Shift+.** force-stops the active model operation.
+Select **Cancel loading** in the model library, or use **Stop** in the activity pill at the top of the workspace, which shows what the model is doing and the elapsed time while it works. It remains available when you switch workspaces. **Escape** stops the current load, chat response, or memory capture; **Ctrl/⌘Shift+.** force-stops the active model operation.
 
 Model runtimes run in separate worker processes so a blocked native loader can be terminated without waiting for it to return or closing the app. Loads and waits for the first response time out after 120 seconds; a stream that stalls after starting is stopped after 60 seconds without a token. MLX requests direct answers when the model template supports disabling thinking. Waiting for a response is shown separately from explicit model thinking. Stopping preserves your conversation and any partial response; you can then choose a smaller model or retry. A stopped runtime is loaded again for the next request.
 

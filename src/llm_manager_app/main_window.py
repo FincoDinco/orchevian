@@ -72,6 +72,7 @@ from llm_manager_app.widgets.sidebar import (
     SidebarSelection,
 )
 from llm_manager_app.widgets.templates_view import TemplatesView
+from llm_manager_app.widgets.web_search_settings import load_search_keys
 from llm_manager_app.workers import (
     CatalogWorker,
     ChatWorker,
@@ -168,6 +169,8 @@ class MainWindow(QMainWindow):
                 if as_bool(self._settings.value("memory/recall", True), True)
                 else None,
             )
+            # Optional search-service keys from Settings → Web Search.
+            self._chat_service.web.keys = load_search_keys(self._settings)
             self._worker_thread, self._worker = start_chat_worker(
                 self._chat_service, self, session=self._session
             )
@@ -516,7 +519,9 @@ class MainWindow(QMainWindow):
         self._model_activity = ModelActivity(toolbar)
         self._model_activity.stop_requested.connect(self._force_stop_model)
         self._force_stop = self._model_activity.stop
+        # The action stays visible; ModelActivity delays and fades its own visibility.
         self._model_activity_action = toolbar.addWidget(self._model_activity)
+        self._model_activity.bind_action(self._model_activity_action)
         spacer = QWidget(toolbar)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
@@ -803,6 +808,7 @@ class MainWindow(QMainWindow):
             self._settings_dialog.return_sends_changed.connect(self._chat_view.set_return_sends)
             self._settings_dialog.rescan_requested.connect(self._rescan_catalog)
             self._settings_dialog.automatic_memory_changed.connect(self._on_automatic_memory)
+            self._settings_dialog.web_search_keys_changed.connect(self._on_search_keys)
             self._settings_dialog.back_requested.connect(
                 lambda: self._sidebar.select_section(CHATS)
             )
@@ -1093,7 +1099,6 @@ class MainWindow(QMainWindow):
         self._download_button.setVisible(not private)
         self._force_stop_action.setEnabled(busy and not self._stop_requested)
         self._model_activity_action.setEnabled(True)
-        self._model_activity_action.setVisible(busy)
         if not busy:
             self._stop_requested = False
         message = (
@@ -1114,6 +1119,10 @@ class MainWindow(QMainWindow):
             else "Generating response…"
         )
         self._model_activity.set_activity(busy, message, self._stop_requested)
+
+    def _on_search_keys(self, keys: list) -> None:
+        if self._chat_service is not None:
+            self._chat_service.web.keys = list(keys)
 
     def _force_stop_model(self) -> None:
         if self._closing or self._stop_requested:

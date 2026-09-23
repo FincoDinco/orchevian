@@ -345,6 +345,15 @@ class AttachmentPanel(QWidget):
             if self.project_scope:
                 note = f" {visual_count} image/page previews available to this project's chats."
             self.status.setText(self.status.text() + note)
+        # Progress, errors and project guidance stay visible. Routine chat
+        # explanations move to tooltips so the composer area stays calm.
+        guidance = self.status.text().strip()
+        routine = not (self.busy() or self._errors.get(self.cid) or self.project_scope)
+        for control in (self.project_files, self.sources, self.disclosure):
+            control.setToolTip(guidance if routine else "")
+        if routine:
+            self.status.clear()
+        self.status.setVisible(bool(self.status.text()))
         self.setVisible(
             bool(
                 self.project_scope

@@ -92,15 +92,6 @@ class ChatView(QWidget):
         self._inspector_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._inspector_btn.toggled.connect(self._on_inspector_toggled)
 
-        self._regen = QPushButton(self)
-        self._regen.setToolTip("Regenerate response")
-        self._regen.setAccessibleName("Regenerate response")
-        self._regen.setIcon(icon("refresh"))
-        self._regen.setObjectName("regenerateButton")
-        self._regen.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._regen.setEnabled(False)
-        self._regen.clicked.connect(self.regenerate)
-
         toolbar = QWidget(self)
         toolbar.setObjectName("chatToolbar")
         toolbar_layout = QHBoxLayout(toolbar)
@@ -110,7 +101,6 @@ class ChatView(QWidget):
         self._title.setObjectName("chatTitle")
         toolbar_layout.addWidget(self._title, 1)
         toolbar_layout.addWidget(self._inspector_btn)
-        toolbar_layout.addWidget(self._regen)
         self._remember = QToolButton(self)
         self._remember.setObjectName("rememberChatButton")
         self._remember.setIcon(icon("brain"))
@@ -122,6 +112,7 @@ class ChatView(QWidget):
         toolbar_layout.addWidget(self._remember)
 
         self._transcript = Transcript(self)
+        self._transcript.retry_requested.connect(self.regenerate)
         self._model_empty = QLabel(self)
         self._model_empty.setObjectName("modelEmpty")
         self._model_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -172,7 +163,6 @@ class ChatView(QWidget):
         self._web_status.setObjectName("settingsHint")
         self._web_status.hide()
         self._composer.web_search.toggled.connect(self._web_choice_changed)
-        self._web_choice_changed(False)
 
         body = QWidget(self)
         body.setObjectName("chatBody")
@@ -388,8 +378,13 @@ class ChatView(QWidget):
     def banner_text(self) -> str:
         return self._banner.text() if self._banner.isVisible() else ""
 
-    def show_banner(self, text: str) -> None:
+    def show_banner(self, text: str, *, error: bool = False) -> None:
+        """A quiet status notice, or a softly tinted one for errors."""
         self._banner.setText(text)
+        if self._banner.property("tone") != ("error" if error else ""):
+            self._banner.setProperty("tone", "error" if error else "")
+            self._banner.style().unpolish(self._banner)
+            self._banner.style().polish(self._banner)
         self._banner.show()
 
     def set_session_busy(self, busy: bool) -> None:
@@ -471,7 +466,7 @@ class ChatView(QWidget):
             self._composer.clear()
             self._composer.setEnabled(False)
             self._composer.set_send_enabled(False)
-            self._regen.setEnabled(False)
+            self._transcript.set_retry(None)
             self._remember.setEnabled(False)
             self._picker.set_current(None)
             self._picker.setEnabled(False)
@@ -516,8 +511,7 @@ class ChatView(QWidget):
             self._composer.set_text(draft)
         banner = self._rejected_banners.pop(cid, None)
         if banner:
-            self._banner.setText(banner)
-            self._banner.show()
+            self.show_banner(banner, error=True)
         else:
             self._banner.hide()
         self._sync_session_busy_banner()
@@ -555,9 +549,12 @@ class ChatView(QWidget):
         self.regenerate_requested.emit(cid, self._inspector.params())
 
     def _web_choice_changed(self, checked):
-        state = "on" if checked else "off"
-        self._regen.setText(f"Regenerate · Web {state}")
-        self._regen.setToolTip(f"Regenerate the last answer with Web search {state}.")
+        del checked
+        self._sync_enabled()
+
+    def retry_label(self) -> str:
+        # Retry follows the composer's Web search choice; say so when it is on.
+        return "Retry with web search" if self._composer.web_search.isChecked() else "Retry"
 
     def on_web_progress(self, cid, message):
         if cid != self._generating_id:
@@ -608,8 +605,7 @@ class ChatView(QWidget):
             self._transcript.revert_stream(restore_user=restore_user, restore=restore_turn)
         if draft is not None:
             self._composer.set_text(draft)
-        self._banner.setText(banner)
-        self._banner.show()
+        self.show_banner(banner, error=True)
         self._sync_enabled()
         self._composer.focus_edit()
 
@@ -667,8 +663,7 @@ class ChatView(QWidget):
         if self._cid == conversation_id:
             self._transcript.keep_stream()
             self._error_plain_id = conversation_id
-            self._banner.setText(message or code)
-            self._banner.show()
+            self.show_banner(message or code, error=True)
             self._composer.focus_edit()
         self._sync_enabled()
         self.attachments.refresh()
@@ -699,7 +694,7 @@ class ChatView(QWidget):
         if self._generating_id is not None:
             self._inspector.show_restart()
         if code != "generating":
-            self.show_banner(message or code)
+            self.show_banner(message or code, error=True)
 
     def _on_pick(self, ref: object) -> None:
         if not isinstance(ref, ModelRef):
@@ -758,8 +753,9 @@ class ChatView(QWidget):
         self._composer.set_send_enabled(has_model and not busy)
         self._composer.set_importing(self.attachments.busy())
         self.attachments.set_generating(busy)
-        self._regen.setEnabled(has_model and bool(self._transcript.turns()) and not busy
-                               and not self.attachments.busy())
+        can_retry = (has_model and bool(self._transcript.turns()) and not busy
+                     and not self.attachments.busy())
+        self._transcript.set_retry(self.retry_label() if can_retry else None)
         self._remember.setEnabled(
             has_model and self._cid >= 0 and bool(self._transcript.turns()) and not busy
         )

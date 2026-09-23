@@ -124,7 +124,7 @@ def test_settings_dialog_has_general_models_advanced_no_api(tmp_path: Path) -> N
         tabs = dialog.findChild(QTabWidget, "settingsTabs")
         assert tabs is not None
         labels = [tabs.tabText(i) for i in range(tabs.count())]
-        assert labels == ["General", "Models", "Advanced"]
+        assert labels == ["General", "Web Search", "Models", "Advanced"]
         joined = " ".join(labels).lower()
         assert "api" not in joined
         assert "server" not in joined
@@ -361,7 +361,7 @@ def test_inspector_system_prompt_writes_through(tmp_path: Path) -> None:
         assert probe.messages
         roles = [turn.role for turn in probe.messages[0]]
         assert roles[0] == "system"
-        assert probe.messages[0][0].content == "You are terse."
+        assert probe.messages[0][0].content.endswith("\n\nYou are terse.")
     finally:
         window.close()
         store.close()
@@ -503,7 +503,7 @@ def test_shortcuts_sheet_lists_design_keys(tmp_path: Path) -> None:
         tabs = settings.findChild(QTabWidget, "settingsTabs")
         assert tabs is not None
         assert [tabs.tabText(i) for i in range(tabs.count())] == [
-            "General", "Models", "API", "Advanced",
+            "General", "Web Search", "Models", "API", "Advanced",
         ]
         actions = window.findChildren(QAction)
         prefs = QKeySequence(QKeySequence.StandardKey.Preferences)
@@ -667,7 +667,7 @@ def test_system_prompt_flush_on_send_before_debounce(tmp_path: Path) -> None:
         assert library.get_conversation(cid).system_prompt == "You are terse."
         assert probe.messages
         assert probe.messages[0][0].role == "system"
-        assert probe.messages[0][0].content == "You are terse."
+        assert probe.messages[0][0].content.endswith("\n\nYou are terse.")
     finally:
         window.close()
         store.close()

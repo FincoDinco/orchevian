@@ -415,6 +415,11 @@ class ArtifactService:
             "in slide notes for presentations. Forms use only fields, never blocks or paragraphs. "
             "Never use a literal [source] placeholder."
         )
+        # One leading system turn: chat templates such as Qwen's reject a second one,
+        # and chats already start with the date and any chat guidance.
+        messages = list(messages)
+        if messages and messages[0].role == "system":
+            prompt += "\n\n" + messages.pop(0).content
         turns = [ChatTurn("system", prompt), *messages]
         for attempt in range(2):
             if progress:

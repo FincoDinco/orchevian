@@ -17,10 +17,11 @@ def test_each_chat_keeps_search_setting_and_regeneration_is_explicit(tmp_path):
         view.composer().web_search.setChecked(True)
         view.set_conversation(second)
         assert not view.composer().web_search.isChecked()
-        assert "Web off" in view._regen.text()
+        assert view._transcript.retry_label() in {None, "Retry"}
+        assert view.retry_label() == "Retry"
         view.set_conversation(first)
         assert view.composer().web_search.isChecked()
-        assert "Web on" in view._regen.text()
+        assert view.retry_label() == "Retry with web search"
     finally:
         window.close()
         store.close()
@@ -32,7 +33,7 @@ def test_project_search_drafts_transfer_on_send_and_do_not_leak(tmp_path):
     window._worker.done.disconnect(window._schedule_automatic_memory)
     calls = []
 
-    def retrieve(query, cancel, progress):
+    def retrieve(query, cancel, progress, focus=None):
         calls.append(query)
         progress("Reading web pages…")
         return result()

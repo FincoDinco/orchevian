@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 
 from llm_engine.domain.errors import EngineError
 from llm_engine.domain.models import (
@@ -57,6 +57,15 @@ def assemble_prompt(conversation: Conversation) -> list[ChatTurn]:
     return turns
 
 
+def current_date_note(today: date | None = None) -> str:
+    """Local calendar date, so 'today' and dated sources mean something to the model."""
+    today = today or date.today()
+    return (
+        f"Today's date is {today:%A}, {today:%B} {today.day}, {today.year}. "
+        "Interpret 'today', 'yesterday', 'this week' and similar words relative to this date."
+    )
+
+
 class ChatService:
     """One generation at a time. ``send`` / ``regenerate`` return after the user txn."""
 
@@ -73,6 +82,7 @@ class ChatService:
     ) -> None:
         self._library = library
         self._session = session
+        self.today = date.today  # Replaceable clock for tests.
         self._store = library._store
         self.on_token = on_token
         self.on_done = on_done
@@ -396,19 +406,26 @@ class ChatService:
                 if self.is_private(conversation_id)
                 else assemble_prompt(replace(conv, system_prompt=system_prompt))
             )
-            query = next((turn.content for turn in reversed(messages) if turn.role == "user"), "")
+            questions = [turn.content for turn in messages if turn.role == "user"]
+            query = questions[-1] if questions else ""
             def web_progress(message):
                 if self.on_web_progress:
                     self.on_web_progress(conversation_id, message)
 
             web_context = self.web.context(
-                conversation_id, query, web_search, cancel, web_progress
+                conversation_id, query, web_search, cancel, web_progress,
+                earlier=questions[:-1],
             )
-            if web_context:
-                if messages and messages[0].role == "system":
-                    messages[0] = ChatTurn("system", messages[0].content + "\n\n" + web_context)
-                else:
-                    messages.insert(0, ChatTurn("system", web_context))
+            # One leading system turn: some chat templates reject a second one.
+            system = "\n\n".join(part for part in (
+                current_date_note(self.today()),
+                messages[0].content if messages and messages[0].role == "system" else "",
+                web_context,
+            ) if part)
+            if messages and messages[0].role == "system":
+                messages[0] = ChatTurn("system", system)
+            else:
+                messages.insert(0, ChatTurn("system", system))
             if cancel.is_set():
                 raise EngineError("cancelled", "Model request stopped.")
             during_load = True

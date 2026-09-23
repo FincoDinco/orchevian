@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDoubleSpinBox,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from llm_engine.domain.models import Conversation, GenerationParams
+from llm_manager_app.icons import icon
 from llm_manager_app.tokens import named_tab_width
 
 _TAB_NAME = "Inspector"
@@ -187,10 +188,11 @@ class Inspector(QWidget):
         self._advanced_toggle.setText("Advanced controls")
         self._advanced_toggle.setCheckable(True)
         self._advanced_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._advanced_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self._advanced_toggle.setIcon(icon("chevron-right"))
+        self._advanced_toggle.setIconSize(QSize(12, 12))
         self._advanced_toggle.toggled.connect(advanced.setVisible)
-        self._advanced_toggle.toggled.connect(lambda expanded: self._advanced_toggle.setArrowType(
-            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        self._advanced_toggle.toggled.connect(lambda expanded: self._advanced_toggle.setIcon(
+            icon("chevron-down" if expanded else "chevron-right")
         ))
         body_layout.addWidget(self._advanced_toggle)
         body_layout.addWidget(advanced)
