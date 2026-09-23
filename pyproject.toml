@@ -21,7 +21,7 @@ dependencies = [
     "pypdfium2>=4.30,<6",
     "uvicorn>=0.34",
     "python-pptx>=1.0,<2",
-    "reportlab>=4.4,<5",
+    "reportlab>=4.4,<6",
     "pyyaml>=6,<7",
     "pydantic>=2,<3",
 ]
