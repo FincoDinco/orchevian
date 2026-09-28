@@ -5,18 +5,18 @@
 Orchevian needs [Python 3.13](https://www.python.org/) and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync --extra gui --group dev                           # GUI, tests, lint
-uv sync --extra gui --extra gguf --group dev              # plus GGUF (llama.cpp)
-uv sync --extra gui --extra mlx --extra gguf --group dev  # plus MLX on Apple Silicon
+uv sync --locked --extra gui --extra mlx --extra gguf --group dev
 ```
 
-Running `uv sync` without an extra removes that extra's packages.
+This installs the runtimes required by the desktop smoke test: GGUF on every platform
+and MLX on Apple Silicon (automatically omitted elsewhere). Running `uv sync` without
+an extra removes that extra's packages.
 
 ## Checks
 
 ```bash
-uv run ruff check .
-uv run pytest -q
+uv run --no-sync ruff check .
+uv run --no-sync pytest -q
 ```
 
 Some tests open local loopback servers; sandboxed environments may need to allow them.

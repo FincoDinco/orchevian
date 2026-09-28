@@ -4,9 +4,11 @@ Orchevian ships as a normal desktop app with its own icon: a `.dmg` for macOS, a
 installer for Windows, and an AppImage for Linux. Python, Qt and the engine are
 included, so people don't need Python or a terminal.
 
-Model runtimes are not bundled yet: the desktop app uses [Ollama](https://ollama.com),
-which people install separately. Existing GGUF or MLX model files stay visible, with an
-explanation that those runtimes need the source install.
+The model runtimes are bundled too: llama.cpp for GGUF models on every platform (Metal
+on macOS, CPU on Windows and Linux) and MLX on Apple Silicon Macs. Installing the app
+installs these runtimes inside its bundle; no separate runtime download or setup is
+required. Model weights are downloaded separately from **Models**.
+[Ollama](https://ollama.com) remains a separate, optional install.
 
 ## Build locally
 
@@ -15,14 +17,14 @@ development extras can't leak into the app:
 
 ```sh
 # macOS / Linux
-UV_PROJECT_ENVIRONMENT=.venv-package uv sync --locked --no-default-groups --extra gui --group packaging
+UV_PROJECT_ENVIRONMENT=.venv-package uv sync --locked --no-default-groups --extra gui --extra mlx --extra gguf --group packaging
 .venv-package/bin/python scripts/build_desktop.py
 ```
 
 ```powershell
 # Windows PowerShell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-package"
-uv sync --locked --no-default-groups --extra gui --group packaging
+uv sync --locked --no-default-groups --extra gui --extra mlx --extra gguf --group packaging
 .venv-package\Scripts\python.exe scripts\build_desktop.py
 ```
 
@@ -33,7 +35,7 @@ The script:
 3. runs the bundled app's smoke check outside the checkout, with temporary data and a
    fake model (database, model worker, local API with its key, document readers, images
    and OCR plumbing, web reading, file creation, Markdown, app icon and secret storage,
-   and the main window);
+   the bundled llama.cpp and MLX runtimes, and the main window);
 4. writes a portable archive and the platform download into `dist/`, each with a
    `.sha256` checksum:
 
@@ -45,6 +47,35 @@ The script:
 
 On macOS, Apple's developer tools must be installed and their license accepted
 (`sudo xcodebuild -license`).
+
+Missing Inno Setup or appimagetool fails the build. A portable archive alone is not
+a successful installer build.
+
+## Verify the downloaded installer
+
+The preview and release workflows both pass their downloads to
+`.github/workflows/verify-installers.yml`. Each platform gets a fresh hosted runner
+with no app Python packages, Ollama, MLX, or llama.cpp installed by the workflow.
+Python runs only the standard-library verification harness:
+
+```sh
+python3 scripts/check_installer.py --downloads dist --report dist/install-smoke-report.json
+```
+
+The check requires one platform installer with a matching SHA-256 sidecar. It copies
+the Mac app out of its DMG before launching it; on Linux it extracts the AppImage and
+runs `AppRun` because hosted runners lack FUSE. On Windows it silently installs,
+checks, and uninstalls the app; **use only a disposable host** and add
+`--disposable-host`. It can affect the machine's installer registration.
+
+The installed app must report that it is frozen and that its platform runtimes load.
+It runs outside the source checkout, from a path with spaces, with Python environment
+overrides removed and temporary app data. A JSON report records failures as well as
+success. Release publication depends on all three installed-app checks passing.
+
+These checks do not establish real-model inference quality, normal desktop launch
+with Gatekeeper/SmartScreen, Linux FUSE support, or upgrade/rollback behavior. Track
+those manual checks in [the release checklist](../docs/release-checklist.md).
 
 ## Icons
 
@@ -61,7 +92,8 @@ and rerun it to change the icon; the generated files are committed.
 
 `.github/workflows/release.yml` checks that the tag matches the version, builds on
 macOS, Windows and Linux (installing Inno Setup and a checksum-pinned appimagetool),
-and publishes a GitHub Release with the downloads, checksums, and install notes from
+then verifies the installed downloads on fresh runners before publishing a GitHub
+Release with the downloads, checksums, and install notes from
 `scripts/release_notes.py`. The **Desktop packages** workflow builds the same files for
 pull requests without publishing.
 
@@ -78,8 +110,15 @@ the LGPL requires. Both files are viewable in **Help → About Orchevian**.
 - The spec lists data PyInstaller can't discover: SQL schema and migrations (loaded by
   path), icons and SVGs, Markdown and Uvicorn modules loaded dynamically, PowerPoint
   templates, ReportLab fonts and PDFium.
-- Optional model runtimes (MLX, llama.cpp) are excluded even if installed on the build
-  machine.
+- llama.cpp compiles from source during `uv sync` with `GGML_NATIVE=OFF` (set in
+  `pyproject.toml`), so the bundle targets a portable CPU baseline (AVX2 on x64) instead of
+  the build machine's processor. Windows and Linux builds are CPU-only; GPU backends (CUDA,
+  Vulkan) are not bundled. Delete `.venv-package` after changing those settings.
+- The spec collects the runtimes' native libraries and the model architectures `mlx_lm`
+  imports by name, and fails the build if llama.cpp (or MLX on macOS) is missing. torch
+  is excluded; `mlx_lm` only needs `transformers` for tokenizers.
+- The smoke check loads both runtimes in a spawned worker. Set `ORCHEVIAN_SMOKE_MODEL_DIR`
+  to a folder with `gguf/` and `mlx/` models to also generate text with the smallest of each.
 - The entry point calls `multiprocessing.freeze_support()` before importing Qt, as
   [PyInstaller requires](https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html#multi-processing)
   for the app's worker processes.
@@ -90,8 +129,7 @@ the LGPL requires. Both files are viewable in **Help → About Orchevian**.
 - **Code signing.** Builds are unsigned, so macOS Gatekeeper and Windows SmartScreen
   warn on first launch; the release notes explain how to open the app. Signing needs an
   Apple Developer account (and notarization) and a Windows code-signing certificate.
-- **Bundled runtimes.** Shipping MLX (Apple Silicon) and llama.cpp inside the app would
-  remove the need for Ollama.
+- **GPU acceleration on Windows and Linux.** Bundled llama.cpp is CPU-only there.
 - **Intel Macs.** Builds follow the build machine's architecture; an Intel (x64) macOS
   build needs its own runner.
 - **Clean-machine testing** of each download before a public release.

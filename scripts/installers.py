@@ -54,14 +54,13 @@ def macos_dmg(app: Path, dist: Path, version: str, smoke) -> Path:
     return target
 
 
-def windows_installer(folder: Path, dist: Path, version: str) -> Path | None:
+def windows_installer(folder: Path, dist: Path, version: str) -> Path:
     compiler = shutil.which("iscc") or next(
         (str(p) for p in (Path(os.environ.get("ProgramFiles(x86)", "")) / "Inno Setup 6"
                           / "ISCC.exe",) if p.is_file()), None,
     )
     if compiler is None:
-        print("Inno Setup (iscc) not found; skipping the Windows installer.")
-        return None
+        raise RuntimeError("Inno Setup (iscc) is required to build the Windows installer.")
     name = f"Orchevian-{version}-windows-{arch()}-setup"
     subprocess.run([compiler, f"/DAppVersion={version}", f"/DSourceDir={folder}",
                     f"/DOutputDir={dist}", f"/DOutputName={name}",
@@ -72,11 +71,10 @@ def windows_installer(folder: Path, dist: Path, version: str) -> Path | None:
     return target
 
 
-def linux_appimage(folder: Path, dist: Path, version: str) -> Path | None:
+def linux_appimage(folder: Path, dist: Path, version: str) -> Path:
     tool = os.environ.get("APPIMAGETOOL") or shutil.which("appimagetool")
     if tool is None:
-        print("appimagetool not found; skipping the AppImage.")
-        return None
+        raise RuntimeError("appimagetool is required to build the Linux AppImage.")
     target = dist / f"Orchevian-{version}-linux-{arch()}.AppImage"
     with TemporaryDirectory(prefix="orchevian-appdir-") as temporary:
         appdir = Path(temporary) / "Orchevian.AppDir"

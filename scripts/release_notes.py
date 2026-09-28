@@ -29,8 +29,9 @@ by Apple yet, so the first time, right-click Orchevian in Applications and choos
 
 **Linux:** make the AppImage executable (`chmod +x Orchevian-*.AppImage`) and run it.
 
-Orchevian runs AI models on your computer. Install [Ollama](https://ollama.com) to use
-Ollama models, then open **Models** in Orchevian to download one.
+Orchevian runs AI models on your computer. GGUF models work on every system, and MLX
+models on Apple Silicon Macs, with nothing else to install. Open **Models** in Orchevian
+to download one. To use Ollama models too, install [Ollama](https://ollama.com).
 
 Each file has a `.sha256` checksum you can use to verify the download.
 """

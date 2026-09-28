@@ -33,6 +33,97 @@ def _web_fixture_worker(connection, query):
         connection.close()
 
 
+def _runtime_worker(connection):
+    """Load the bundled native runtimes where the app runs models: a spawned worker."""
+    import platform
+
+    from llm_engine.backends.gguf import GGUFBackend
+    from llm_engine.backends.mlx import MLXBackend
+
+    try:
+        found = []
+        for backend in (GGUFBackend(), MLXBackend()):
+            ok, reason = backend.is_available()
+            found.append((str(backend.name), ok, reason))
+        import llama_cpp
+
+        llama_cpp.llama_backend_init()
+        info = llama_cpp.llama_print_system_info().decode()
+        if sys.platform == "darwin" and platform.machine() == "arm64":
+            import mlx.core as mx
+            from mlx_lm.sample_utils import make_sampler  # noqa: F401
+            from transformers import AutoTokenizer  # noqa: F401
+
+            if (mx.array([1, 2]) + 1).sum().item() != 5:
+                raise RuntimeError("MLX computed a wrong result")
+            info += f" | MLX {mx.default_device()}"
+        connection.send(("done", (found, info)))
+    except BaseException:
+        connection.send(("error", traceback.format_exc()))
+    finally:
+        connection.close()
+
+
+def _check_runtimes(checks: list[str]) -> None:
+    import multiprocessing
+    import platform
+
+    receiver, sender = multiprocessing.get_context("spawn").Pipe(duplex=False)
+    process = multiprocessing.get_context("spawn").Process(
+        target=_runtime_worker, args=(sender,), daemon=True,
+    )
+    process.start()
+    sender.close()
+    try:
+        if not receiver.poll(60):
+            raise RuntimeError("Runtime check did not answer")
+        kind, payload = receiver.recv()
+    finally:
+        process.join(10)
+        if process.is_alive():
+            process.kill()
+    if kind != "done":
+        raise RuntimeError(f"Bundled runtime failed to load:\n{payload}")
+    found, info = payload
+    expected = {"gguf"} | ({"mlx"} if sys.platform == "darwin"
+                           and platform.machine() == "arm64" else set())
+    missing = {name: reason for name, ok, reason in found if name in expected and not ok}
+    if missing:
+        raise RuntimeError(f"Bundled runtimes unavailable: {missing}")
+    checks.append(f"bundled runtimes {sorted(expected)} ({info.strip()})")
+
+
+def _check_real_models(registry, session, checks: list[str]) -> None:
+    """Optional: ORCHEVIAN_SMOKE_MODEL_DIR runs the smallest real model per runtime."""
+    from llm_engine.domain.models import ChatTurn, GenerationParams
+
+    models, _ = registry.list_models()
+    smallest = {}
+    for model in models:
+        name = str(model.ref.backend)
+        if name in {"gguf", "mlx"} and model.available and (
+            name not in smallest or model.size_bytes < smallest[name].size_bytes
+        ):
+            smallest[name] = model
+    if not smallest:
+        raise RuntimeError("ORCHEVIAN_SMOKE_MODEL_DIR has no GGUF or MLX models")
+    for name, model in sorted(smallest.items()):
+        cancel = threading.Event()
+        session.load(model.ref, cancel=cancel)
+        stream = session.generate(
+            [ChatTurn("user", "Reply with one word: hello")],
+            GenerationParams(temperature=0, max_tokens=16), cancel,
+        )
+        try:
+            text = "".join(stream)
+        finally:
+            stream.close()
+            session.force_unload()
+        if not text.strip():
+            raise RuntimeError(f"{model.ref.id} generated nothing")
+        checks.append(f"real {name} generation ({model.ref.id}: {text.strip()[:40]!r})")
+
+
 def _exercise(root: Path, checks: list[str]) -> None:
     import httpx
     import markdown
@@ -263,6 +354,14 @@ def _exercise(root: Path, checks: list[str]) -> None:
                 vault.set_keyring(null.Keyring())
             checks.append(f"app icon and secret storage ({backend})")
 
+            _check_runtimes(checks)
+            if os.environ.get("ORCHEVIAN_SMOKE_MODEL_DIR"):
+                real = BackendRegistry()
+                try:
+                    _check_real_models(real, ModelSession(real), checks)
+                finally:
+                    real.close()
+
             settings = QSettings(str(root / "gui.ini"), QSettings.Format.IniFormat)
             window = MainWindow(registry=registry, library=library, settings=settings)
             try:
@@ -297,7 +396,10 @@ def main() -> int:
             os.environ["ORCHEVIAN_CONFIG"] = str(root / "config.json")
             os.environ["ORCHEVIAN_DB"] = str(root / "data.db")
             (root / "config.json").write_text(
-                json.dumps({"model_dir": str(root / "models"), "api_port": 8080}),
+                json.dumps({
+                    "model_dir": os.environ.get("ORCHEVIAN_SMOKE_MODEL_DIR", str(root / "models")),
+                    "api_port": 8080,
+                }),
                 encoding="utf-8",
             )
             _exercise(root, checks)

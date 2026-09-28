@@ -26,7 +26,8 @@ def test_desktop_entry_smoke_check(tmp_path):
     assert "isolated artifact generators, previews and ZIP export" in report["checks"]
     assert "isolated web retrieval and retained sources (offline fixture)" in report["checks"]
     assert any(check.startswith("app icon and secret storage") for check in report["checks"])
-    assert len(report["checks"]) == 11
+    assert any(check.startswith("bundled runtimes") for check in report["checks"])
+    assert len(report["checks"]) == 12
 
 
 def test_missing_frozen_runtimes_explain_packaged_limitation(monkeypatch, tmp_path):

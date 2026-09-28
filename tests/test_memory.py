@@ -276,3 +276,118 @@ def test_source_fingerprint_changes_after_new_messages(setup):
     first = source_key(library.get_conversation(cid))
     store.add_message(cid, "assistant", "A new idea")
     assert source_key(library.get_conversation(cid)) != first
+
+
+def test_evidence_quoted_across_list_items_is_grounded_and_ungrounded_notes_dropped(tmp_path):
+    store = SqliteStore(tmp_path / "data.db")
+    library = LibraryService(store)
+    cid = library.create_conversation(model=REF).summary.id
+    store.add_message(cid, "user", "Any tips?")
+    reply = "- Water at the base.\n  - Mulch in *June*.\n1. Prune weekly."
+    store.add_message(cid, "assistant", reply)
+    vault = MemoryVault(tmp_path / "brain")
+    note = {"body": "Garden care.", "tags": [], "links": []}
+    payload = {"notes": [
+        {**note, "title": "Watering", "evidence": "Water at the base. Mulch in *June*."},
+        {**note, "title": "Pruning", "evidence": "- Mulch in *June*.\n- Prune weekly."},
+        {**note, "title": "Invented", "evidence": "Spray daily."},
+    ]}
+    chat, _, session = service(library, payload)
+    result = chat.capture_memories(cid, vault, threading.Event())
+    assert result.notes == ("Notes/Watering", "Notes/Pruning")
+    session.unload()
+    store.close()
+
+
+def test_notes_about_the_user_are_tagged_and_recalled_without_shared_words(setup):
+    _, library, cid, vault = setup
+    payload = response()
+    payload["notes"][0]["about_user"] = True
+    chat, _, session = service(library, payload)
+    chat.capture_memories(cid, vault, threading.Event())
+    session.unload()
+    about = vault.read("Notes/Local workspace")
+    assert about.tags[0] == "about-me"
+    assert "about-me" not in vault.read("Notes/Writing practice").tags
+    recalled = vault.recall("Suggest a packed lunch for a hike")
+    assert [note.key for note in recalled] == [about.key]
+    # Keyword matches come first and a note is never recalled twice.
+    recalled = vault.recall("research practice")
+    assert [note.key for note in recalled] == ["Notes/Writing practice", about.key]
+    assert vault.recall("Suggest a packed lunch", profile=0) == []
+
+
+def test_invalid_about_user_flag_is_rejected(setup):
+    _, library, cid, vault = setup
+    payload = response()
+    payload["notes"][0]["about_user"] = "yes"
+    chat, _, session = service(library, payload)
+    with pytest.raises(EngineError):
+        chat.capture_memories(cid, vault, threading.Event())
+    session.unload()
+
+
+def test_personal_memory_requires_user_evidence_before_writing(setup):
+    store, library, cid, vault = setup
+    store.add_message(cid, "assistant", "You are vegan.")
+    payload = {"notes": [{
+        "title": "Diet", "body": "The user is vegan.", "evidence": "You are vegan.",
+        "about_user": True,
+    }]}
+    chat, _, session = service(library, payload)
+    try:
+        with pytest.raises(EngineError, match="user's own words"):
+            chat.capture_memories(cid, vault, threading.Event())
+        assert vault.list_notes() == []
+    finally:
+        session.unload()
+
+
+def test_unsupported_personal_memory_does_not_discard_grounded_knowledge(setup):
+    store, library, cid, vault = setup
+    store.add_message(cid, "assistant", "Use an outline. You are vegan.")
+    payload = {"notes": [
+        {"title": "Diet", "body": "The user is vegan.", "evidence": "You are vegan.",
+         "about_user": True},
+        {"title": "Outline", "body": "Use an outline.", "evidence": "Use an outline.",
+         "about_user": False},
+    ]}
+    chat, _, session = service(library, payload)
+    try:
+        result = chat.capture_memories(cid, vault, threading.Event())
+        assert result.notes == ("Notes/Outline",)
+        assert vault.recall("Suggest lunch") == []
+    finally:
+        session.unload()
+
+
+@pytest.mark.parametrize("tag", ["about-me", "about me", "-about-me-"])
+def test_model_tags_cannot_bypass_personal_memory_validation(setup, tag):
+    store, library, cid, vault = setup
+    store.add_message(cid, "assistant", "You are vegan.")
+    payload = {"notes": [{
+        "title": "Diet", "body": "The user is vegan.", "evidence": "You are vegan.",
+        "about_user": False, "tags": [tag],
+    }]}
+    chat, _, session = service(library, payload)
+    try:
+        result = chat.capture_memories(cid, vault, threading.Event())
+        assert "about-me" not in vault.read(result.notes[0]).tags
+        assert vault.recall("Suggest lunch") == []
+    finally:
+        session.unload()
+
+
+def test_personal_memory_accepts_normalized_user_list_evidence(setup):
+    store, library, cid, vault = setup
+    store.add_message(cid, "user", "- I eat vegan food.\n- I avoid peanuts.")
+    payload = {"notes": [{
+        "title": "Diet", "body": "The user eats vegan food and avoids peanuts.",
+        "evidence": "I eat vegan food. I avoid peanuts.", "about_user": True,
+    }]}
+    chat, _, session = service(library, payload)
+    try:
+        result = chat.capture_memories(cid, vault, threading.Event())
+        assert [note.key for note in vault.recall("Suggest lunch")] == list(result.notes)
+    finally:
+        session.unload()

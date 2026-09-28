@@ -80,8 +80,7 @@ def main() -> int:
         download = installers.windows_installer(bundle, dist, version)
     else:
         download = installers.linux_appimage(bundle, dist, version)
-    if download is not None:
-        print(f"Built {download}")
+    print(f"Built {download}")
     return 0
 
 

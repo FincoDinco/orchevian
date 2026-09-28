@@ -80,3 +80,8 @@ packages = ["src/llm_engine", "src/llm_manager_app"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/llm_engine/store/schema.sql" = "llm_engine/store/schema.sql"
+
+# llama.cpp builds from source. Target a portable CPU baseline rather than the build
+# machine's, so bundled apps don't crash with illegal instructions on older processors.
+[tool.uv.config-settings-package]
+llama-cpp-python = { "cmake.define.GGML_NATIVE" = "OFF" }

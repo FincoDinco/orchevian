@@ -29,7 +29,8 @@ previously called LLM Manager; existing chats, models, projects, and notes carry
 - A native-feeling interface with light and dark themes, press feedback, and support
   for the system Reduce Motion setting.
 - Model runtimes in separate processes, so a stuck model can be stopped at any time.
-- Preview desktop builds for macOS, Windows, and Linux.
+- Desktop apps for macOS, Windows, and Linux that run GGUF models (and MLX models on
+  Apple Silicon) with nothing else to install.
 
 ### Security
 

@@ -195,7 +195,7 @@ Limits: eight files/request, 120,000 characters of model output, 20 MB/output fi
 
 Notes live in `second-brain/` beside your database by default. **Choose vault…** opens another folder, including an existing Markdown vault. Notes can be edited outside the app; select **Refresh notes** to pick up changes. Saving reports a conflict when a note has changed on disk. Deleted notes move to the vault's `.trash/` folder.
 
-**Use relevant memories in chats** is enabled by default. It adds up to four notes matched by keywords to the model's context, excluding source transcripts. Turn it off in Second Brain to chat without recalled notes. Memory capture runs in the background and can be cancelled.
+**Use relevant memories in chats** is enabled by default. It adds up to four notes matched by keywords plus up to six notes tagged `about-me`, excluding source transcripts and duplicates. Personal notes can help even when your question uses different words. Generated personal notes must cite your own messages; assistant statements alone cannot add them to your profile. Evidence matching tolerates whitespace and Markdown list markers. You can add or remove the `about-me` tag in a note, or turn recall off in Second Brain to chat without recalled notes. Memory capture runs in the background and can be cancelled.
 
 ## Templates
 

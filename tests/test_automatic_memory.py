@@ -22,7 +22,7 @@ class MemoryBackend(FakeBackend):
         self.entered = threading.Event()
 
     def stream_generate(self, handle, messages, params, cancel):
-        if messages[0].role != "system" or "Extract up to" not in messages[0].content:
+        if messages[0].role != "system" or "Second Brain. Read" not in messages[0].content:
             yield "I will keep that in mind."
             return
         self.captures += 1
