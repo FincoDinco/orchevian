@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import threading
 import zipfile
 
@@ -102,6 +103,53 @@ def test_editable_slides_notes_form_fields_and_spreadsheet_formulas():
     assert book.calculation.fullCalcOnLoad
     assert "recalculation" in generated.warning
     book.close()
+
+
+def chart_ranges(spec):
+    with zipfile.ZipFile(io.BytesIO(generate(spec).data)) as archive:
+        chart = archive.read("xl/charts/chart1.xml").decode()
+    # Series title, then category and value ranges; Excel hides an axis unless delete="0".
+    return re.findall(r"<(?:\w+:)?f>([^<]*)<", chart)[1:], chart.count('<delete val="0"/>')
+
+
+@pytest.mark.parametrize("label", ["Total", "TOTAL USD", "Grand total", "Subtotal", "Totals"])
+def test_spreadsheet_chart_plots_items_without_trailing_totals_and_shows_axes(label):
+    spec = specification("xlsx")
+    spec.sheets[0].rows = [
+        ["Item", "Cost"], ["Design", 450], ["Review", 100], [label, "=SUM(B2:B3)"],
+    ]
+    assert chart_ranges(spec) == (["'Budget'!$A$2:$A$3", "'Budget'!$B$2:$B$3"], 2)
+
+
+@pytest.mark.parametrize("rows,ranges", [
+    ([["Item", "Cost"], ["Design", 450], ["Totally new", 100]], ["$A$2:$A$3", "$B$2:$B$3"]),
+    ([["Item", "Cost"], ["Total", 450]], ["$A$2", "$B$2"]),  # A lone data row is still charted.
+])
+def test_spreadsheet_chart_keeps_item_rows_that_resemble_totals(rows, ranges):
+    spec = specification("xlsx")
+    spec.sheets[0].rows = rows
+    assert chart_ranges(spec)[0] == [f"'Budget'!{cells}" for cells in ranges]
+
+
+def test_spreadsheet_columns_fit_content_and_print_one_page_wide():
+    from openpyxl import load_workbook
+
+    spec = specification("xlsx")
+    item = "A considerably longer inventory item name"
+    spec.sheets[0].rows = [
+        ["Item", "Quantity", "Unit USD", "Total USD", "Notes"],
+        [item, 4, 12.5, "=B2*C2", "x" * 500],
+    ]
+    book = load_workbook(io.BytesIO(generate(spec).data))
+    try:
+        ws = book["Budget"]
+        widths = [ws.column_dimensions[column].width for column in "ABCDE"]
+        assert widths[0] >= len(item) and widths[4] == 60
+        assert max(widths[1:4]) < 22  # The fixed width that pushed columns onto a second page.
+        assert ws.sheet_properties.pageSetUpPr.fitToPage
+        assert (ws.page_setup.fitToWidth, ws.page_setup.fitToHeight) == (1, 0)
+    finally:
+        book.close()
 
 
 @pytest.mark.parametrize(
