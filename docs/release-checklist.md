@@ -54,10 +54,26 @@ it leaves untested:
   Accepted on CI: the Windows check installs silently per-user and uninstalls with
   the bundled uninstaller. **Not covered:** reinstalling, and whether user data
   remains after uninstalling.
-- [ ] Check a copy of an existing library through installation, upgrade, and rollback;
+- [x] Check a copy of an existing library through installation, upgrade, and rollback;
   verify chats, projects, notes, files, and settings remain available. Preserve a
   backup before testing. Never perform rollback experiments against the only copy.
-  This does not need a clean machine.
+  `dist/library-upgrade-check/report.json`: CI's `75ff16d` app and then the previous
+  September 28 build each opened copies of a current library (13 chats, 54 messages,
+  a project, a chat file, a generated file) and of an old LLM Manager library with
+  test rows. Every table was unchanged except the new tables added to the old library;
+  everything read back through the engine services. The old library's automatic backup
+  matched it exactly, and migrations 2–7 never alter old tables, so going back keeps
+  working. The old LLM Manager app itself was not available to run, and this library
+  had no Second Brain notes.
+
+### Other findings
+
+- [ ] **Keychain failures silently fall back to the settings file.** `SecretStore.set`
+  (`src/llm_manager_app/secret_store.py`) stores a key in the settings file whenever a
+  Keychain write raises, not only where no vault exists, as the changelog says. The
+  library check triggered it by changing `HOME`; a locked keychain or a denied access
+  prompt would too. Decide whether to report the failure instead.
+- Old LLM Manager favourite models stay in the library but Orchevian never shows them.
 
 ## Native Office acceptance
 
