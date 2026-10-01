@@ -32,8 +32,12 @@ def checked_download(downloads: Path, system: str) -> tuple[Path, str]:
     match = re.fullmatch(r"([0-9a-fA-F]{64})  (.+)", checksum)
     if match is None or match[2] != package.name:
         raise RuntimeError(f"Invalid checksum file: {sidecar.name}")
+    # Not hashlib.file_digest: it needs Python 3.11, and Ubuntu 22.04's python3 is 3.10.
+    hasher = hashlib.sha256()
     with package.open("rb") as source:
-        actual = hashlib.file_digest(source, "sha256").hexdigest()
+        for block in iter(lambda: source.read(1 << 20), b""):
+            hasher.update(block)
+    actual = hasher.hexdigest()
     if actual != match[1].lower():
         raise RuntimeError(f"Checksum mismatch: {package.name}")
     return package, actual
