@@ -8,7 +8,7 @@ supported machine can install the app and generate text.
 
 | Check | Status | Evidence or limitation |
 | --- | --- | --- |
-| Existing full local test suite | Passed | 731 tests passed on October 1 with the spreadsheet chart and print-width fix. |
+| Existing full local test suite | Passed | 733 tests passed on October 1 with the spreadsheet and source-attribution fixes. |
 | Installer verification tests | Passed | 12 installer and notices tests; checksum rejection, required runtimes, host isolation, Windows cleanup, and missing build tools. |
 | Lint | Passed | `ruff check .` |
 | Apple Silicon app and DMG | Passed locally | Rebuilt app and mounted DMG passed all 12 frozen smoke checks. |
@@ -94,9 +94,13 @@ same totals, clean save and reopen.
 - [x] **Wide sheets print across pages.** Columns are sized to their content (10–60)
   instead of a fixed 22, and sheets print fit to one page wide; the inventory sheet
   now prints all four columns on one page.
-- [ ] **Internal source IDs in decks.** Notes read `Sources: brief.txt [source: D37e476cb:1]`
-  because the file prompt asks for actual source identifiers
-  (`src/llm_engine/services/artifacts.py:413-415`). Product decision; still open.
+- [x] **Internal source IDs in decks.** Notes read `Sources: brief.txt [source: D37e476cb:1]`
+  because the file prompt asked for actual source identifiers. Files now credit sources
+  by file name: the prompt asks for file names only, any leftover excerpt IDs are
+  removed before files are written, and only a file name counts as attribution.
+  `dist/model-matrix-09/report.json` reran the slides and writing cases with the same
+  MLX model: no IDs in any model output, and notes read `Sources: brief.txt`. The
+  writing case still needed one attribution repair, as it did in `model-matrix-08`.
 - Cosmetic only: Word tables write numbers as left-aligned plain text; the budget
   slide shows amounts without a currency; the chart title touches the top gridline
   and a one-series chart's legend repeats the category labels.
