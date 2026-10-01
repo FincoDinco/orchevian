@@ -501,6 +501,79 @@ def test_missing_source_attribution_gets_one_repair_before_publish(tmp_path):
             session.force_unload()
 
 
+def _create_with_brief(tmp_path, outputs):
+    backend = StructuredBackend(outputs)
+    store = SqliteStore(tmp_path / "data.db")
+    library = LibraryService(store)
+    session = ModelSession(BackendRegistry([backend]))
+    errors = []
+    chat = ChatService(library, session, on_error=lambda *args: errors.append(args))
+    cid = library.create_conversation(model=backend.list_models()[0].ref).summary.id
+    brief = tmp_path / "brief.txt"
+    brief.write_text("Proposal budget is $450")
+    doc = chat.documents.import_file(cid, brief, threading.Event())
+    return backend, store, session, chat, cid, errors, f"D{doc.id[:8]}:1"
+
+
+def test_created_files_credit_sources_by_name_without_internal_excerpt_ids(tmp_path):
+    document = Spec.model_validate({**specification("docx").model_dump(), "blocks": [
+        {"text": "Budget is $450 [source: D0123abcd:1]."},
+        {"type": "list", "items": ["Research [D0123abcd:2]", "[source: D0123abcd:3]"]},
+        {"type": "table", "rows": [["Item", "Source"], ["Design", "brief.txt (D0123abcd:1)"]]},
+        {"text": "Scope (P0123abcdv2:3; V89abcdefv1:2) agreed"},
+        {"text": "Part P20261001 and [source-1] stay"},
+        {"text": "Sources: D0123abcd:1, brief.txt"},
+    ]})
+    deck = specification("pptx")
+    deck.slides[0].bullets = ["Kickoff [D0123abcd:1]"]
+    deck.slides[0].notes = "Sources: brief.txt [source: D0123abcd:1, D0123abcd:2]"
+    call = json.dumps({"tool": "create_documents", "files": [document.model_dump(),
+                                                            deck.model_dump()]})
+    backend, store, session, chat, cid, errors, _ = _create_with_brief(tmp_path, [call])
+    try:
+        chat.send(cid, "Create a proposal and deck from the brief", artifact_request={})
+        chat._worker_thread.join(30)
+        assert not chat._worker_thread.is_alive() and not errors
+        assert len(backend.prompts) == 1  # Cleaned in place; no repair round needed.
+        assert "never copy [source] excerpt identifiers" in backend.prompts[0][0].content
+        made = {a.name: chat.artifacts.get(cid, a.id)[0] for a in chat.artifacts.list(cid)}
+        blocks = made["deliverable.docx"].spec["blocks"]
+        assert [b["text"] for b in blocks if b["type"] == "paragraph"] == [
+            "Budget is $450.", "Scope agreed", "Part P20261001 and [source-1] stay",
+            "Sources: brief.txt",
+        ]
+        assert blocks[1]["items"] == ["Research"]
+        assert blocks[2]["rows"][1] == ["Design", "brief.txt"]
+        slide = made["deliverable.pptx"].spec["slides"][0]
+        assert (slide["bullets"], slide["notes"]) == (["Kickoff"], "Sources: brief.txt")
+        assert not any("0123abcd" in g.text for g in made.values())
+    finally:
+        session.force_unload()
+        store.close()
+
+
+def test_internal_excerpt_id_alone_is_not_source_attribution(tmp_path):
+    deck = specification("pptx")
+    fixed = deck.model_copy(deep=True)
+    fixed.slides[0].notes = "Sources: brief.txt"
+    outputs = []  # The first output needs the real excerpt ID, known only after import.
+    backend, store, session, chat, cid, errors, label = _create_with_brief(tmp_path, outputs)
+    deck.slides[0].notes = f"Sources: [source: {label}]"
+    backend.outputs = iter(
+        json.dumps({"tool": "create_documents", "files": [s.model_dump()]}) for s in (deck, fixed)
+    )
+    try:
+        chat.send(cid, "Create a deck from the brief", artifact_request={})
+        chat._worker_thread.join(30)
+        assert not chat._worker_thread.is_alive() and not errors
+        assert "missing source attribution" in backend.prompts[1][-1].content
+        made = chat.artifacts.get(cid, chat.artifacts.list(cid)[0].id)[0]
+        assert made.spec["slides"][0]["notes"] == "Sources: brief.txt"
+    finally:
+        session.force_unload()
+        store.close()
+
+
 def test_model_without_structured_output_reports_error_without_partial_files(tmp_path):
     backend = StructuredBackend(["I cannot make files", "Here is a report"])
     with SqliteStore(tmp_path / "data.db") as store:
