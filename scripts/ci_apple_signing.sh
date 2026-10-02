@@ -25,6 +25,13 @@ printf '%s' "$MACOS_SIGNING_P12_BASE64" | base64 --decode > "$certificate"
 security import "$certificate" -k "$keychain" -f pkcs12 -P "$MACOS_SIGNING_P12_PASSWORD" \
   -T /usr/bin/codesign
 rm "$certificate"
+# Apple issues Developer ID certificates from its G2 intermediate, which macOS does not
+# ship (Xcode adds it). Without it the identity is invalid and codesign cannot use it.
+intermediate="$RUNNER_TEMP/DeveloperIDG2CA.cer"
+curl -fsSL -o "$intermediate" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+echo "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a  $intermediate" \
+  | shasum -a 256 -c -
+security import "$intermediate" -k "$keychain"
 # Let codesign use the key without a confirmation dialog.
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" \
   "$keychain" > /dev/null
@@ -34,7 +41,9 @@ security list-keychains -d user -s "$keychain" "${existing[@]}"
 identity=$(security find-identity -v -p codesigning "$keychain" \
   | awk '/Developer ID Application/ { print $2; exit }')
 if [[ -z "$identity" ]]; then
-  echo "::error::The certificate has no Developer ID Application identity."
+  # Without -v this also lists identities that are present but not valid, and why.
+  security find-identity -p codesigning "$keychain"
+  echo "::error::The certificate has no valid Developer ID Application identity."
   exit 1
 fi
 
