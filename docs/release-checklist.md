@@ -1,6 +1,6 @@
 # Release checklist
 
-Status: October 1, 2026. Version remains 0.1.0 while preparing the first public
+Status: October 2, 2026. Version remains 0.1.0 while preparing the first public
 release. A passing unit suite or runtime import check does not establish that every
 supported machine can install the app and generate text.
 
@@ -15,7 +15,8 @@ supported machine can install the app and generate text.
 | Installed Mac copy | Passed locally | `dist/install-smoke-report.json`: checksum verified, app copied out of DMG into a temporary path with spaces, image ejected, all 12 checks passed. This is a development Mac, not a clean machine. |
 | Installers and fresh-runner verification | Passed in CI | **Desktop packages** run 36897083553 on `75ff16d`: the macOS DMG, Windows installer, and Linux AppImage each passed checksum verification and all 12 checks on a separate runner (reports copied to `dist/installed-desktop-75ff16d/`). Linux runs the extracted AppImage, not the FUSE launch path. The first run (36431655477) failed on Linux only because the harness used `hashlib.file_digest`, which Ubuntu 22.04's Python 3.10 lacks. |
 | Real-model file generation | Prior bounded pass | `dist/artifact-acceptance-14/report.json` and all nine cases in `dist/model-matrix-08/report.json`. Not native Office acceptance. |
-| Signing and notarization | Pending | Only an Apple Development identity was available locally; no repository signing secrets were configured. |
+| macOS signing and notarization | Passed locally; CI not yet run | `dist/macos-signing-01/`: on October 2 CI's `75ff16d` app was signed with Developer ID (hardened runtime, no entitlements) by `scripts/sign_macos.py`, passed all 12 checks and 14 with real GGUF and MLX models, and was notarized (Accepted, no issues) and stapled. The DMG built from it was signed, notarized and stapled; `check_installer.py --require-notarized` passed with Gatekeeper reporting **Notarized Developer ID** for both. The CI signing step and repository secrets are untested. |
+| Windows signing | Pending | No code-signing certificate. |
 | Native Word/Excel/PowerPoint review | Passed with findings | `dist/office-acceptance-01/report.json`: Word 16.113.3, Excel 16.113.2, PowerPoint 16.113.3 on macOS 27.0. All nine fixtures opened without repair; totals and formulas recalculated correctly; Excel-saved copies reopened cleanly; decks presented. Three spreadsheet findings fixed and rechecked in Excel (`dist/office-acceptance-02/`); see **Office findings** below. |
 
 ## Build and installation
@@ -123,11 +124,15 @@ same totals, clean save and reopen.
 
 ## Signing and publication
 
-- [ ] Obtain/configure a **Developer ID Application** identity for macOS and
-  notarization credentials. An Apple Development certificate does not substitute
-  for Developer ID distribution. See [Apple's Developer ID documentation](https://developer.apple.com/help/account/certificates/create-developer-id-certificates).
+- [x] Obtain/configure a **Developer ID Application** identity for macOS and
+  notarization credentials. Done October 1: Developer ID certificate, App Store
+  Connect API key, local notarytool profile and five repository secrets.
 - [ ] Implement and validate macOS signing, notarization, and stapling; verify the
-  downloaded app through normal Gatekeeper launch on a clean Mac.
+  downloaded app through normal Gatekeeper launch on a clean Mac. Implemented and
+  passed locally on October 2 (see **Current evidence**). Remaining: a **Desktop
+  packages** run that signs and notarizes with the repository secrets, then a
+  first launch of that DMG after a browser download (quarantined), on this Mac
+  because no clean Mac is available.
 - [ ] Configure and validate Windows code signing; inspect the downloaded installer's
   signature and normal installation behavior.
 - [ ] Finish acceptance before updating all three version fields and the changelog.
