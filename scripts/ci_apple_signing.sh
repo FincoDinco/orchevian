@@ -27,11 +27,14 @@ security import "$certificate" -k "$keychain" -f pkcs12 -P "$MACOS_SIGNING_P12_P
 rm "$certificate"
 # Apple issues Developer ID certificates from its G2 intermediate, which macOS does not
 # ship (Xcode adds it). Without it the identity is invalid and codesign cannot use it.
-intermediate="$RUNNER_TEMP/DeveloperIDG2CA.cer"
-curl -fsSL -o "$intermediate" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
-echo "f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a  $intermediate" \
-  | shasum -a 256 -c -
-security import "$intermediate" -k "$keychain"
+# A .p12 exported from Keychain Access usually includes it already.
+g2=F16CD3C54C7F83CEA4BF1A3E6A0819C8AAA8E4A1528FD144715F350643D2DF3A
+if ! security find-certificate -a -Z "$keychain" | grep -q "SHA-256 hash: $g2"; then
+  intermediate="$RUNNER_TEMP/DeveloperIDG2CA.cer"
+  curl -fsSL -o "$intermediate" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+  echo "$g2  $intermediate" | shasum -a 256 -c -
+  security import "$intermediate" -k "$keychain"
+fi
 # Let codesign use the key without a confirmation dialog.
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" \
   "$keychain" > /dev/null
