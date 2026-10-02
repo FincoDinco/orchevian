@@ -14,6 +14,16 @@ if [[ -z "${MACOS_SIGNING_P12_BASE64:-}" ]]; then
   exit 0
 fi
 
+# notarytool only checks these after the build, so check their form now.
+if [[ ! "$NOTARY_API_ISSUER_ID" =~ ^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$ ]]; then
+  echo "::error::NOTARY_API_ISSUER_ID is not an App Store Connect Issuer ID (a UUID)."
+  exit 1
+fi
+if [[ ! "$NOTARY_API_KEY_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+  echo "::error::NOTARY_API_KEY_ID is not a 10-character App Store Connect key ID."
+  exit 1
+fi
+
 keychain="$RUNNER_TEMP/signing.keychain-db"
 password=$(uuidgen)
 security create-keychain -p "$password" "$keychain"
