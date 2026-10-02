@@ -6,6 +6,11 @@ on:
       artifact-prefix:
         required: true
         type: string
+      # Fail unless Gatekeeper accepts the macOS download as notarized and stapled.
+      require-notarized:
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -33,7 +38,7 @@ jobs:
       # Python here only runs the standard-library verification harness.
       - name: Check the installed app and bundled runtimes
         shell: bash
-        run: python3 scripts/check_installer.py --downloads downloads --report dist/install-smoke-report.json --disposable-host
+        run: python3 scripts/check_installer.py --downloads downloads --report dist/install-smoke-report.json --disposable-host ${{ inputs.require-notarized && '--require-notarized' || '' }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

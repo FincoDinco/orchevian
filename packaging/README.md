@@ -73,9 +73,36 @@ It runs outside the source checkout, from a path with spaces, with Python enviro
 overrides removed and temporary app data. A JSON report records failures as well as
 success. Release publication depends on all three installed-app checks passing.
 
-These checks do not establish real-model inference quality, normal desktop launch
-with Gatekeeper/SmartScreen, Linux FUSE support, or upgrade/rollback behavior. Track
-those manual checks in [the release checklist](../docs/release-checklist.md).
+On macOS the report also records Gatekeeper's verdict on the disk image and the
+installed app, and whether each carries a stapled notarization ticket.
+`--require-notarized`, which the release workflow passes, fails the check unless both
+are accepted as notarized.
+
+These checks do not establish real-model inference quality, a first launch from a
+browser download (with quarantine), SmartScreen, Linux FUSE support, or
+upgrade/rollback behavior. Track those manual checks in
+[the release checklist](../docs/release-checklist.md).
+
+## macOS signing and notarization
+
+`scripts/sign_macos.py` signs inside out with the hardened runtime and a secure
+timestamp: every library outside a framework, then each Qt framework, then the app.
+It then submits the app to Apple's notary service, staples the ticket, builds the
+DMG from the stapled app, and signs, notarizes and staples the DMG too. The app needs
+no entitlements: the frozen smoke check, including llama.cpp and MLX on the GPU,
+passes under the hardened runtime.
+
+`scripts/build_desktop.py` does this only when the environment provides credentials:
+
+- `MACOS_SIGNING_IDENTITY`: the Developer ID Application identity (name or SHA-1).
+- `NOTARY_PROFILE`: a local `xcrun notarytool store-credentials` profile, or in CI
+  `NOTARY_API_KEY_PATH`, `NOTARY_API_KEY_ID` and `NOTARY_API_ISSUER_ID`.
+
+Without an identity the build stays unsigned; with an identity but no notary
+credentials it signs without notarizing. In CI, `scripts/ci_apple_signing.sh` imports
+the certificate from repository secrets into a temporary keychain. **Desktop packages**
+signs when the secrets are available (not for forks or Dependabot); **Release** fails
+without them. Each notarization usually takes a few minutes.
 
 ## Icons
 
@@ -126,9 +153,9 @@ the LGPL requires. Both files are viewable in **Help → About Orchevian**.
 
 ## Not done yet
 
-- **Code signing.** Builds are unsigned, so macOS Gatekeeper and Windows SmartScreen
-  warn on first launch; the release notes explain how to open the app. Signing needs an
-  Apple Developer account (and notarization) and a Windows code-signing certificate.
+- **Windows code signing.** The installer is unsigned, so SmartScreen warns on first
+  launch; the release notes explain how to continue. Signing needs a Windows
+  code-signing certificate.
 - **GPU acceleration on Windows and Linux.** Bundled llama.cpp is CPU-only there.
 - **Intel Macs.** Builds follow the build machine's architecture; an Intel (x64) macOS
   build needs its own runner.

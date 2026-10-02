@@ -62,6 +62,27 @@ def smoke(program: Path, work: Path, report: Path) -> dict:
     return payload
 
 
+def gatekeeper(download: Path, app: Path) -> dict:
+    """What Gatekeeper decides when someone opens the disk image and then the app."""
+    verdicts = {}
+    for path, kind in ((download, ["--type", "open", "--context", "context:primary-signature"]),
+                       (app, ["--type", "execute"])):
+        assessed = subprocess.run(["spctl", "--assess", "-vv", *kind, str(path)],
+                                  capture_output=True, text=True, timeout=120, check=False)
+        # A stapled ticket lets the first launch pass without reaching Apple.
+        stapled = subprocess.run(["xcrun", "stapler", "validate", str(path)],
+                                 capture_output=True, text=True, timeout=120, check=False)
+        verdicts[path.name] = {"accepted": assessed.returncode == 0,
+                               "assessment": (assessed.stdout + assessed.stderr).strip(),
+                               "stapled": stapled.returncode == 0}
+    verdicts["notarized"] = all(
+        verdict["accepted"] and verdict["stapled"]
+        and "source=Notarized Developer ID" in verdict["assessment"]
+        for verdict in verdicts.values()
+    )
+    return verdicts
+
+
 def check_package(package: Path, work: Path, report: Path) -> dict:
     if sys.platform == "darwin":
         mount = work / "Mounted Download"
@@ -98,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--disposable-host", action="store_true",
                         help="Confirm Windows installation is on a disposable test host")
+    parser.add_argument("--require-notarized", action="store_true",
+                        help="Fail unless Gatekeeper accepts the macOS download and app")
     args = parser.parse_args(argv)
     report = args.report.resolve()
     report.parent.mkdir(parents=True, exist_ok=True)
@@ -110,6 +133,11 @@ def main(argv: list[str] | None = None) -> int:
         with TemporaryDirectory(prefix="orchevian installed check ") as temporary:
             work = Path(temporary)
             payload = check_package(package, work, work / "smoke.json")
+            if sys.platform == "darwin":
+                result["gatekeeper"] = gatekeeper(package,
+                                                  work / "Installed App" / "Orchevian.app")
+                if args.require_notarized and not result["gatekeeper"]["notarized"]:
+                    raise RuntimeError("Gatekeeper does not accept the download as notarized")
         result.update(ok=True, smoke=payload, outside_checkout=True,
                       python_environment_removed=True)
     except Exception as exc:

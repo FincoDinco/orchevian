@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import plistlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +21,7 @@ def load_script(name):
 
 checker = load_script("check_installer")
 installers = load_script("installers")
+signer = load_script("sign_macos")
 
 
 def download(tmp_path):
@@ -127,3 +129,58 @@ def test_missing_installer_tools_fail_instead_of_skipping(tmp_path, monkeypatch)
         installers.windows_installer(tmp_path, tmp_path, "0.1.0")
     with pytest.raises(RuntimeError, match="appimagetool"):
         installers.linux_appimage(tmp_path, tmp_path, "0.1.0")
+
+
+@pytest.mark.parametrize("assessment,required,exit_code", [
+    ("accepted\nsource=Notarized Developer ID", True, 0),
+    ("rejected\nsource=Unnotarized Developer ID", True, 1),
+    ("rejected\nsource=Unnotarized Developer ID", False, 0),
+])
+def test_mac_download_records_gatekeeper_and_can_require_notarization(
+        tmp_path, monkeypatch, assessment, required, exit_code):
+    monkeypatch.setattr(checker.sys, "platform", "darwin")
+    package = tmp_path / "Orchevian-1.0.0-macos-arm64.dmg"
+    monkeypatch.setattr(checker, "checked_download", lambda *args: (package, "0" * 64))
+    monkeypatch.setattr(checker, "check_package", lambda *args: {"ok": True})
+    accepted = assessment.startswith("accepted")
+    monkeypatch.setattr(checker.subprocess, "run", lambda command, **kwargs: SimpleNamespace(
+        returncode=0 if accepted or command[0] != "spctl" else 3, stdout="", stderr=assessment))
+    report = tmp_path / "report.json"
+    flags = ["--require-notarized"] if required else []
+    assert checker.main(["--downloads", str(tmp_path), "--report", str(report), *flags]) \
+        == exit_code
+    verdicts = json.loads(report.read_text())["gatekeeper"]
+    assert verdicts["notarized"] is accepted
+    assert verdicts["Orchevian.app"]["stapled"]
+    assert verdicts[package.name]["accepted"] is accepted
+
+
+def test_signs_libraries_then_frameworks_then_app(tmp_path, monkeypatch):
+    app = tmp_path / "Orchevian.app"
+    contents = app / "Contents"
+    (contents / "MacOS").mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable": "Orchevian"}))
+    macho = b"\xcf\xfa\xed\xfe" + bytes(12)
+    (contents / "MacOS" / "Orchevian").write_bytes(macho)
+    frameworks = contents / "Frameworks"
+    qt = frameworks / "PySide6/Qt/lib/QtCore.framework/Versions/A"
+    qt.mkdir(parents=True)
+    (qt / "QtCore").write_bytes(macho)
+    (frameworks / "lib-dynload").mkdir()
+    (frameworks / "lib-dynload" / "_ssl.so").write_bytes(macho)
+    (frameworks / "libpython3.13.dylib").write_bytes(macho)
+    (frameworks / "base_library.zip").write_bytes(b"PK\x03\x04")
+    (frameworks / "QtCore").symlink_to("PySide6/Qt/lib/QtCore.framework/Versions/A/QtCore")
+    calls = []
+    monkeypatch.setattr(signer.subprocess, "run", lambda command, **kwargs: (
+        calls.append(command), SimpleNamespace(returncode=0))[1])
+    signer.sign_app(app, "IDENTITY")
+    libraries, framework, bundle, verify = calls
+    # Each real library once; symlinks, data, the framework's binary and the app's
+    # own executable are signed with their bundles instead.
+    assert sorted(Path(item).name for item in libraries if item.startswith(str(app))) \
+        == ["_ssl.so", "libpython3.13.dylib"]
+    assert framework[-1].endswith("QtCore.framework")
+    assert bundle[-1] == str(app)
+    assert {"--timestamp", "runtime"} <= set(bundle)
+    assert verify[:2] == ["codesign", "--verify"]

@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import installers  # noqa: E402
+import sign_macos  # noqa: E402
 
 
 def main() -> int:
@@ -57,8 +58,21 @@ def main() -> int:
         print(json.dumps(report, indent=2))
 
     smoke(executable)
+    signer = sign_macos.identity() if sys.platform == "darwin" else None
+    notary = sign_macos.notary_auth() if signer else None
+    if signer:
+        # Sign before anything is archived, then check the hardened app still passes.
+        sign_macos.sign_app(bundle, signer)
+        smoke(executable)
+        if notary:
+            sign_macos.notarize(bundle, notary)
 
-    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    def sign_image(image: Path) -> None:
+        sign_macos.sign_dmg(image, signer)
+        if notary:
+            sign_macos.notarize(image, notary)
+
+    version =tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
     name = f"Orchevian-{version}-{sys.platform}-{platform.machine().lower()}"
     if sys.platform == "win32":
         archive = Path(shutil.make_archive(str(dist / name), "zip", dist, bundle.name))
@@ -75,7 +89,8 @@ def main() -> int:
     print(f"Built and verified {archive}")
     # The download people install: a disk image, an installer, or an AppImage.
     if sys.platform == "darwin":
-        download = installers.macos_dmg(bundle, dist, version, smoke)
+        download = installers.macos_dmg(bundle, dist, version, smoke,
+                                        sign_image if signer else None)
     elif sys.platform == "win32":
         download = installers.windows_installer(bundle, dist, version)
     else:

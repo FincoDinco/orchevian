@@ -31,7 +31,7 @@ def checksum(path: Path) -> None:
                                                      encoding="utf-8")
 
 
-def macos_dmg(app: Path, dist: Path, version: str, smoke) -> Path:
+def macos_dmg(app: Path, dist: Path, version: str, smoke, sign=None) -> Path:
     target = dist / f"Orchevian-{version}-macos-{arch()}.dmg"
     target.unlink(missing_ok=True)
     with TemporaryDirectory(prefix="orchevian-dmg-") as staging:
@@ -42,6 +42,9 @@ def macos_dmg(app: Path, dist: Path, version: str, smoke) -> Path:
         subprocess.run(["hdiutil", "create", "-volname", "Orchevian", "-srcfolder", str(stage),
                         "-fs", "HFS+", "-format", "UDZO", "-ov", str(target)],
                        check=True, stdout=subprocess.DEVNULL)
+    if sign is not None:
+        # Signing and stapling change the image, so they come before its checksum.
+        sign(target)
     # Check the copy people will actually run: mount the image and launch it.
     with TemporaryDirectory(prefix="orchevian-dmg-mount-") as mount:
         subprocess.run(["hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", mount,

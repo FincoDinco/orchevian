@@ -46,6 +46,17 @@ jobs:
               -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
             choco install innosetup -y --no-progress
           }
+      # A release is never published unsigned: this fails if the secrets are missing.
+      - name: Prepare Apple signing
+        if: runner.os == 'macOS'
+        env:
+          MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+          REQUIRE_SIGNING: "true"
+        run: bash scripts/ci_apple_signing.sh
       # llama.cpp compiles from source here (a few minutes); MLX installs only on Apple Silicon.
       - run: uv sync --locked --no-default-groups --extra gui --extra mlx --extra gguf --group packaging
       - run: uv run --no-sync python scripts/build_desktop.py
@@ -64,6 +75,7 @@ jobs:
     uses: ./.github/workflows/verify-installers.yml
     with:
       artifact-prefix: download
+      require-notarized: true
 
   publish:
     needs: [build, verify]
