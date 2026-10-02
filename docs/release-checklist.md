@@ -16,7 +16,7 @@ supported machine can install the app and generate text.
 | Installers and fresh-runner verification | Passed in CI | **Desktop packages** run 36897083553 on `75ff16d`: the macOS DMG, Windows installer, and Linux AppImage each passed checksum verification and all 12 checks on a separate runner (reports copied to `dist/installed-desktop-75ff16d/`). Linux runs the extracted AppImage, not the FUSE launch path. The first run (36431655477) failed on Linux only because the harness used `hashlib.file_digest`, which Ubuntu 22.04's Python 3.10 lacks. |
 | Real-model file generation | Prior bounded pass | `dist/artifact-acceptance-14/report.json` and all nine cases in `dist/model-matrix-08/report.json`. Not native Office acceptance. |
 | macOS signing and notarization | Passed in CI | **Desktop packages** run 37024907968 on `85cc479` signed the app with the repository's Developer ID secrets, notarized and stapled the app and the DMG (Apple submissions e9596daa and 4c6b69a5, both Accepted), and the fresh-runner check reported Gatekeeper **Notarized Developer ID** and a stapled ticket for both (`dist/installed-desktop-85cc479/`). Earlier the same day CI's `75ff16d` app, signed locally with no entitlements, passed 12 checks and 14 with real GGUF and MLX models (`dist/macos-signing-01/`). Three earlier runs failed on setup: the signing secret held an Apple Development identity, then a duplicate intermediate import, then an invalid Issuer ID secret. |
-| Windows signing | Pending | No code-signing certificate. |
+| Windows signing | Deferred to 1.0.1 | Chosen October 2: SignPath Foundation (free for open source; publisher shown as SignPath Foundation; each signing approved by hand). It accepts only projects with an existing release, so 1.0 ships the Windows installer unsigned. |
 | Native Word/Excel/PowerPoint review | Passed with findings | `dist/office-acceptance-01/report.json`: Word 16.113.3, Excel 16.113.2, PowerPoint 16.113.3 on macOS 27.0. All nine fixtures opened without repair; totals and formulas recalculated correctly; Excel-saved copies reopened cleanly; decks presented. Three spreadsheet findings fixed and rechecked in Excel (`dist/office-acceptance-02/`); see **Office findings** below. |
 
 ## Build and installation
@@ -133,7 +133,9 @@ same totals, clean save and reopen.
   browser (quarantined) on this Mac, opened with only the standard "downloaded from
   the Internet" prompt and launched. **Not covered:** a clean Mac.
 - [ ] Configure and validate Windows code signing; inspect the downloaded installer's
-  signature and normal installation behavior.
+  signature and normal installation behavior. **Deferred to 1.0.1:** apply to SignPath
+  Foundation after 1.0 is published, add its code-signing policy page, then sign in
+  `release.yml`. Until then the release notes keep the SmartScreen instructions.
 - [ ] Finish acceptance before updating all three version fields and the changelog.
 - [ ] Push a release tag only when ready to publish. The release workflow waits for
   all three installed-download checks, but those checks do not replace the manual
