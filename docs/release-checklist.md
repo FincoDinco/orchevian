@@ -127,11 +127,11 @@ same totals, clean save and reopen.
 - [x] Obtain/configure a **Developer ID Application** identity for macOS and
   notarization credentials. Done October 1: Developer ID certificate, App Store
   Connect API key, local notarytool profile and five repository secrets.
-- [ ] Implement and validate macOS signing, notarization, and stapling; verify the
-  downloaded app through normal Gatekeeper launch on a clean Mac. Implemented, and
-  passed locally and in CI on October 2 (see **Current evidence**). Remaining: a
-  first launch of CI's DMG after a browser download (quarantined), on this Mac
-  because no clean Mac is available.
+- [x] Implement and validate macOS signing, notarization, and stapling; verify the
+  downloaded app through normal Gatekeeper launch. Passed locally and in CI on
+  October 2 (see **Current evidence**). CI's DMG from run 37024907968, downloaded in a
+  browser (quarantined) on this Mac, opened with only the standard "downloaded from
+  the Internet" prompt and launched. **Not covered:** a clean Mac.
 - [ ] Configure and validate Windows code signing; inspect the downloaded installer's
   signature and normal installation behavior.
 - [ ] Finish acceptance before updating all three version fields and the changelog.
