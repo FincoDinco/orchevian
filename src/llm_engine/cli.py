@@ -71,7 +71,20 @@ def _cmd_migrate(args: argparse.Namespace) -> int:
     return 0
 
 
+# Long enough that a key someone picks by hand can't be guessed.
+MIN_API_KEY_LENGTH = 16
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
+    # The person running serve chooses the key, so it is never printed or logged.
+    supplied = os.environ.get("ORCHEVIAN_API_KEY", "").strip()
+    if len(supplied) < MIN_API_KEY_LENGTH:
+        raise EngineError(
+            "config_invalid",
+            f"Set ORCHEVIAN_API_KEY to the key your clients will send, at least "
+            f"{MIN_API_KEY_LENGTH} characters. On macOS or Linux, for example: "
+            'export ORCHEVIAN_API_KEY="ov-$(openssl rand -hex 24)"',
+        )
     cfg = config.load(args.config, args.db)
     registry = BackendRegistry(cfg=cfg)
     session = ModelSession(registry)
@@ -80,17 +93,12 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # API inference is stateless; an in-memory library keeps serve off the user's DB.
     with SqliteStore(":memory:") as store:
         chat = ChatService(LibraryService(store), session)
-        supplied = os.environ.get("ORCHEVIAN_API_KEY", "").strip()
         api = ApiServerService(chat, CatalogService(registry, session), port=cfg.api_port,
-                               api_key=supplied or None)
+                               api_key=supplied)
         try:
             status = api.start(port=args.port)
             print(f"Local API: {status['url']} (Ctrl+C to stop)", flush=True)
-            if supplied:
-                print("API key: from ORCHEVIAN_API_KEY", flush=True)
-            else:
-                print(f"API key: {api.api_key}  (send as 'Authorization: Bearer <key>')",
-                      flush=True)
+            print("Clients send ORCHEVIAN_API_KEY as 'Authorization: Bearer <key>'.", flush=True)
             while api.status()["running"] and not stopped.wait(0.2):
                 pass
         except KeyboardInterrupt:

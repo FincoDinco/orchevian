@@ -50,3 +50,8 @@ Favourite models pinned in LLM Manager are kept, but Orchevian doesn't show them
 - Replies can't inject raw HTML, images, or non-web links into the chat; hovering a link
   shows where it goes.
 - Build and test workflows pin third-party actions to exact commits.
+- The terminal API server (`orchevian-engine serve`) requires a key you choose, at least
+  16 characters, and never prints one.
+- API error responses no longer include file paths or a model runtime's own error text;
+  Orchevian's log keeps the details.
+- Web pages are fetched over TLS 1.2 or newer only.
