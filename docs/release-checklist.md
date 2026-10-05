@@ -1,6 +1,6 @@
 # Release checklist
 
-Status: October 5, 2026. Version remains 0.1.0 while preparing the first public
+Status: October 5, 2026. Version set to 1.0.0 for the first public
 release. A passing unit suite or runtime import check does not establish that every
 supported machine can install the app and generate text.
 

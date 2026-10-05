@@ -6,8 +6,10 @@ All notable changes to Orchevian are recorded here. The format follows
 
 ## [Unreleased]
 
-Work toward the first public release, 1.0.0. Orchevian is a rebuild of the app
-previously called LLM Manager; existing chats, models, projects, and notes carry over.
+## [1.0.0] - 2026-10-05
+
+The first public release. Orchevian is a rebuild of the app previously called
+LLM Manager; existing chats, models, projects, and notes carry over.
 Favourite models pinned in LLM Manager are kept, but Orchevian doesn't show them yet.
 
 ### Added
