@@ -1,6 +1,6 @@
 # Release checklist
 
-Status: October 2, 2026. Version remains 0.1.0 while preparing the first public
+Status: October 5, 2026. Version remains 0.1.0 while preparing the first public
 release. A passing unit suite or runtime import check does not establish that every
 supported machine can install the app and generate text.
 
@@ -17,6 +17,7 @@ supported machine can install the app and generate text.
 | Real-model file generation | Prior bounded pass | `dist/artifact-acceptance-14/report.json` and all nine cases in `dist/model-matrix-08/report.json`. Not native Office acceptance. |
 | macOS signing and notarization | Passed in CI | **Desktop packages** run 37024907968 on `85cc479` signed the app with the repository's Developer ID secrets, notarized and stapled the app and the DMG (Apple submissions e9596daa and 4c6b69a5, both Accepted), and the fresh-runner check reported Gatekeeper **Notarized Developer ID** and a stapled ticket for both (`dist/installed-desktop-85cc479/`). Earlier the same day CI's `75ff16d` app, signed locally with no entitlements, passed 12 checks and 14 with real GGUF and MLX models (`dist/macos-signing-01/`). Three earlier runs failed on setup: the signing secret held an Apple Development identity, then a duplicate intermediate import, then an invalid Issuer ID secret. |
 | Windows signing | Deferred to 1.0.1 | Chosen October 2: SignPath Foundation (free for open source; publisher shown as SignPath Foundation; each signing approved by hand). It accepts only projects with an existing release, so 1.0 ships the Windows installer unsigned. |
+| Secrets scan | Passed | October 5, gitleaks 8.30.1 (`dist/secret-scan-2026-10-05/`, matches redacted): all 109 commits on every local and GitHub branch, commit messages, the 203 files in the working tree, and the macOS, Windows and Linux builds from **Desktop packages** run 37316203686. Only false positives: the `YOUR_API_KEY` placeholder in `docs/user-guide.md`, and 47 code lines in the bundled `transformers` library (such as `AutoTokenizer`). No key, certificate or `.env` file was ever committed; no Apple signing identifier or Tavily-style key appears in history; the builds contain no databases, logs, settings or `sethhardin` paths, and their only `.pem` is certifi's public CA bundle. GitHub secret scanning is off for the repository. |
 | Native Word/Excel/PowerPoint review | Passed with findings | `dist/office-acceptance-01/report.json`: Word 16.113.3, Excel 16.113.2, PowerPoint 16.113.3 on macOS 27.0. All nine fixtures opened without repair; totals and formulas recalculated correctly; Excel-saved copies reopened cleanly; decks presented. Three spreadsheet findings fixed and rechecked in Excel (`dist/office-acceptance-02/`); see **Office findings** below. |
 
 ## Build and installation
@@ -69,12 +70,14 @@ it leaves untested:
 
 ### Other findings
 
-- [ ] **Keychain failures silently fall back to the settings file.** `SecretStore.set`
-  (`src/llm_manager_app/secret_store.py`) stores a key in the settings file whenever a
-  Keychain write raises, not only where no vault exists, as the changelog says. The
-  library check triggered it by changing `HOME`; a locked keychain or a denied access
-  prompt would too. Decide whether to report the failure instead.
+- [x] **Keychain failures silently fall back to the settings file.** Decided October 5:
+  report the failure. `SecretStore.set` now raises `SecretStoreError` when a vault
+  exists but refuses a key; Web Search shows it on the service's card, Regenerate
+  keeps the current API key and warns, and a key that couldn't be saved at startup is
+  noted under the key in **Settings → Local API**. The settings file is used only
+  where no vault exists.
 - Old LLM Manager favourite models stay in the library but Orchevian never shows them.
+  Decided October 5: keep them, unshown, for 1.0; the changelog says so.
 
 ## Native Office acceptance
 
