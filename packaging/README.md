@@ -107,8 +107,18 @@ without them. Each notarization usually takes a few minutes.
 ## Icons
 
 `scripts/make_icons.py` draws the icon and writes every format to `packaging/icons/`:
-`.icns` (macOS), `.ico` (Windows) and PNGs (Linux, and the window icon). Edit the script
+`.ico` (Windows), PNGs (Linux, and the window icon), and for macOS `orchevian.icon`, an
+Icon Composer document with the ring, orbit and node as separate layers. Edit the script
 and rerun it to change the icon; the generated files are committed.
+
+On macOS, `scripts/build_desktop.py` compiles `orchevian.icon` with Xcode's `actool`
+(Xcode 26 or later) into `Assets.car`, which macOS 26 and later draw as Liquid Glass in
+every icon style (default, dark, clear and tinted), and a flattened `.icns` for macOS
+12–15. To preview the styles without building, render them with Icon Composer's
+`ictool` (inside `Xcode.app/Contents/Applications/Icon Composer.app/Contents/Executables`),
+for example `--rendition ClearDark`. The app doesn't set a window icon on macOS, because
+that would replace the Dock icon with a flat picture. `orchevian.icns` is the
+pre-Liquid Glass macOS icon and is no longer bundled.
 
 ## Publishing a release
 

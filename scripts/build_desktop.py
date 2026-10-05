@@ -21,6 +21,25 @@ import installers  # noqa: E402
 import sign_macos  # noqa: E402
 
 
+def compile_macos_icon() -> None:
+    """Compile the Icon Composer icon the spec bundles: Assets.car, which macOS 26 and
+    later draw as Liquid Glass, and a flattened .icns for earlier versions."""
+    out = ROOT / "build" / "macos-icon"
+    out.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["xcrun", "actool", str(ROOT / "packaging" / "icons" / "orchevian.icon"),
+         "--compile", str(out), "--platform", "macosx", "--app-icon", "orchevian",
+         # Matches LSMinimumSystemVersion in the spec.
+         "--minimum-deployment-target", "12.0",
+         "--output-partial-info-plist", str(out / "partial.plist"),
+         "--output-format", "human-readable-text", "--errors", "--warnings"],
+        check=True,
+    )
+    for name in ("Assets.car", "orchevian.icns"):
+        if not (out / name).is_file():
+            raise RuntimeError(f"actool did not write {name}; the build needs Xcode 26 or later")
+
+
 def main() -> int:
     # Keep PyInstaller's cache inside the project, including on managed build hosts.
     env = os.environ | {"PYINSTALLER_CONFIG_DIR": str(ROOT / "build" / "pyinstaller-cache")}
@@ -29,6 +48,8 @@ def main() -> int:
         [sys.executable, "scripts/third_party_notices.py", "build/THIRD_PARTY_NOTICES.txt"],
         cwd=ROOT, check=True,
     )
+    if sys.platform == "darwin":
+        compile_macos_icon()
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
          "packaging/orchevian.spec"],

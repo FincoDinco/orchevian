@@ -31,6 +31,10 @@ for package in packages:
     runtime_data += datas_
     runtime_binaries += binaries_
     runtime_imports += imports_
+# scripts/build_desktop.py compiles packaging/icons/orchevian.icon here. Assets.car holds
+# the layered icon macOS 26 and later draw as Liquid Glass; the .icns is for earlier ones.
+mac_icon = root / "build" / "macos-icon"
+mac_icon_data = [(str(mac_icon / "Assets.car"), ".")] if sys.platform == "darwin" else []
 
 a = Analysis(
     [str(root / "packaging" / "desktop.py")],
@@ -50,7 +54,7 @@ a = Analysis(
       # python-pptx resolves notes templates through oxml/../templates. The oxml
       # directory must exist on disk even though its modules are in the archive.
       + collect_data_files("pptx", include_py_files=True, includes=["oxml/__init__.py"])
-      + collect_data_files("reportlab") + pdfium_data + runtime_data,
+      + collect_data_files("reportlab") + pdfium_data + runtime_data + mac_icon_data,
     hiddenimports=collect_submodules("uvicorn") + collect_submodules("markdown.extensions")
                   + pdfium_imports + runtime_imports,
     # mlx_lm only needs transformers' tokenizers; never pull in a torch installation.
@@ -78,9 +82,10 @@ if sys.platform == "darwin":
         collection,
         name="Orchevian.app",
         bundle_identifier="com.orchevian.desktop",
-        icon=str(root / "packaging" / "icons" / "orchevian.icns"),
+        icon=str(mac_icon / "orchevian.icns"),
         version=version,
         info_plist={
+            "CFBundleIconName": "orchevian",
             "CFBundleName": "Orchevian",
             "CFBundleDisplayName": "Orchevian",
             "CFBundleShortVersionString": version,
