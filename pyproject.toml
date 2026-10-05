@@ -53,7 +53,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-packaging = ["pyinstaller>=6.16,<7"]
+packaging = [
+    "dmgbuild>=1.6 ; sys_platform == 'darwin'",
+    "pyinstaller>=6.16,<7",
+]
 dev = [
     "pytest>=8.3",
     "ruff>=0.9",

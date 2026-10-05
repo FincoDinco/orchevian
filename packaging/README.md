@@ -41,7 +41,7 @@ The script:
 
 | Platform | Download | Notes |
 | --- | --- | --- |
-| macOS | `Orchevian-<version>-macos-arm64.dmg` | Drag-to-Applications disk image. The app inside the mounted image is smoke-checked again. |
+| macOS | `Orchevian-<version>-macos-arm64.dmg` | Opens as an installer window: the app, an arrow, and Applications to drag it onto. Built with [dmgbuild](https://github.com/dmgbuild/dmgbuild) (packaging group, macOS only). The app inside the mounted image is smoke-checked again. |
 | Windows | `Orchevian-<version>-windows-x64-setup.exe` | Needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`iscc`). Installs per user, no administrator prompt; Start menu and optional desktop shortcut; uninstaller. |
 | Linux | `Orchevian-<version>-linux-x64.AppImage` | Needs [appimagetool](https://github.com/AppImage/appimagetool) (`APPIMAGETOOL` or on `PATH`). |
 
@@ -120,6 +120,11 @@ for example `--rendition ClearDark`. The app doesn't set a window icon on macOS,
 that would replace the Dock icon with a flat picture. `orchevian.icns` is the
 pre-Liquid Glass macOS icon and is no longer bundled.
 
+The script also draws `dmg-background.png` and its `@2x` copy for the disk image window.
+The window's size and icon positions live in `scripts/installers.py`; the height
+allows for macOS 26's taller title bar and for Finder's optional path and status bars,
+and the background runs on below the content so a taller window never shows white.
+
 ## Publishing a release
 
 1. Set the version in `pyproject.toml`, `src/llm_manager_app/__init__.py`, and
@@ -130,7 +135,7 @@ pre-Liquid Glass macOS icon and is no longer bundled.
 `.github/workflows/release.yml` checks that the tag matches the version, builds on
 macOS, Windows and Linux (installing Inno Setup and a checksum-pinned appimagetool),
 then verifies the installed downloads on fresh runners before publishing a GitHub
-Release with the downloads, checksums, and install notes from
+Release with the three installers, one `SHA256SUMS.txt`, and install notes from
 `scripts/release_notes.py`. The **Desktop packages** workflow builds the same files for
 pull requests without publishing.
 

@@ -184,3 +184,32 @@ def test_signs_libraries_then_frameworks_then_app(tmp_path, monkeypatch):
     assert bundle[-1] == str(app)
     assert {"--timestamp", "runtime"} <= set(bundle)
     assert verify[:2] == ["codesign", "--verify"]
+
+
+def test_dmg_opens_as_a_drag_to_applications_window(tmp_path, monkeypatch):
+    import sys
+    from types import ModuleType
+
+    built = {}
+    fake = ModuleType("dmgbuild")
+    fake.build_dmg = lambda filename, volume, settings: built.update(
+        filename=filename, volume=volume, **settings)
+    monkeypatch.setitem(sys.modules, "dmgbuild", fake)
+    monkeypatch.setattr(installers, "checksum", lambda path: None)
+    monkeypatch.setattr(installers.subprocess, "run", lambda *args, **kwargs: None)
+    app = tmp_path / "Orchevian.app"
+    installers.macos_dmg(app, tmp_path, "1.0.0", smoke=lambda program: None)
+    assert built["volume"] == "Orchevian"
+    assert built["files"] == [str(app)]
+    assert built["symlinks"] == {"Applications": "/Applications"}
+    assert set(built["icon_locations"]) == {"Orchevian.app", "Applications"}
+    assert built["window_rect"][1] == installers.DMG_WINDOW
+
+
+def test_dmg_background_covers_the_window_at_both_resolutions():
+    from PIL import Image
+
+    width, height = installers.DMG_WINDOW
+    height += installers.DMG_BACKGROUND_SPARE
+    for name, scale in (("dmg-background.png", 1), ("dmg-background@2x.png", 2)):
+        assert Image.open(installers.ICONS / name).size == (width * scale, height * scale)

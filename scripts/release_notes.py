@@ -32,7 +32,8 @@ Orchevian runs AI models on your computer. GGUF models work on every system, and
 models on Apple Silicon Macs, with nothing else to install. Open **Models** in Orchevian
 to download one. To use Ollama models too, install [Ollama](https://ollama.com).
 
-Each file has a `.sha256` checksum you can use to verify the download.
+To check a download wasn't altered, compare its SHA-256 checksum with the one listed
+in `SHA256SUMS.txt`.
 """
 
 

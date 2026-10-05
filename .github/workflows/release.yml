@@ -94,4 +94,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 scripts/release_notes.py "$GITHUB_REF_NAME" > notes.md
-          gh release create "$GITHUB_REF_NAME" downloads/* --title "Orchevian ${GITHUB_REF_NAME#v}" --notes-file notes.md
+          # Just the three installers, and one checksum list instead of a file beside each.
+          cat downloads/*.sha256 > SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" downloads/*.dmg downloads/*-setup.exe \
+            downloads/*.AppImage SHA256SUMS.txt \
+            --title "Orchevian ${GITHUB_REF_NAME#v}" --notes-file notes.md
