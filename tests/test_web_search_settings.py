@@ -75,3 +75,17 @@ def test_every_service_explains_its_free_plan_and_links_to_signup(tmp_path):
     assert page.cards["exa"].findChild(type(page.cards["exa"].status),
                                        "searchServiceBadge") is not None
     assert "Exa's free search" in text
+
+
+def test_a_key_the_vault_refuses_shows_why_and_is_not_used(tmp_path):
+    from llm_manager_app.secret_store import SecretStore
+    from test_secret_store import LockedVault
+
+    _app()
+    page = WebSearchSettings(SecretStore(_settings(tmp_path), vault=LockedVault()))
+    changes = []
+    page.keys_changed.connect(changes.append)
+    page.cards["exa"].key.setText("exa-key")
+    page.cards["exa"].key.textEdited.emit("exa-key")
+    assert page.cards["exa"].status.text().startswith("✗ Couldn't save the key")
+    assert changes == []

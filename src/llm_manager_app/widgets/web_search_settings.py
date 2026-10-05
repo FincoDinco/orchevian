@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from llm_engine.services.web_retrieval import SEARCH_SERVICES, check_search_key
-from llm_manager_app.secret_store import SecretStore
+from llm_manager_app.secret_store import SecretStore, SecretStoreError
 
 
 def _legacy_setting(service_id: str) -> str:
@@ -197,7 +197,12 @@ class WebSearchSettings(QWidget):
         outer.addWidget(scroll)
 
     def _save(self, card: _ServiceCard) -> None:
-        self._store.set(_secret(card.service.id), card.value())
+        try:
+            self._store.set(_secret(card.service.id), card.value())
+        except SecretStoreError as exc:
+            # Keys save as they're typed, so the error goes in the card, not a dialog.
+            card.status.setText(f"✗ {exc}")
+            return
         card.show_saved()
         self.keys_changed.emit(load_search_keys(self._store))
 
