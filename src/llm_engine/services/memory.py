@@ -19,8 +19,8 @@ from llm_engine.store.vault import (
     safe_stem,
 )
 
-_INSTRUCTIONS = """You organize a personal Second Brain. Read the conversation below and write up
-to 6 atomic notes that will help in future conversations.
+_INSTRUCTIONS = """You organize a personal knowledge base of linked notes. Read the conversation
+below and write up to 6 atomic notes that will help in future conversations.
 1. For each lasting fact the user states about themselves or their work (a decision, preference,
 habit, constraint, goal, project, or their situation), write one note stating it plainly, for
 example "The user writes in British English." Set "about_user": true and quote the user's own

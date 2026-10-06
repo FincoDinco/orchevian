@@ -41,6 +41,7 @@ ORG_NAME = "Orchevian"
 APP_NAME = "Orchevian"
 
 KEY_AUTO_MEMORY = "memory/automatic"
+KEY_MEMORY_RECALL = "memory/recall"
 KEY_APPEARANCE = "appearance"
 KEY_RETURN_SENDS = "return_sends"
 KEY_INSPECTOR_OPEN = "inspector_open"
@@ -54,7 +55,7 @@ _SHORTCUTS: tuple[tuple[str, str], ...] = (
     ("Ctrl+,", "Settings"),
     ("Ctrl+1", "Chats"),
     ("Ctrl+2", "Models"),
-    ("Ctrl+3", "Second Brain"),
+    ("Ctrl+3", "Memoria"),
     ("Ctrl+4", "Downloads"),
     ("Ctrl+5", "Templates"),
     ("Ctrl+Meta+S" if sys.platform == "darwin" else "Ctrl+Shift+S", "Show or hide sidebar"),
@@ -144,6 +145,7 @@ class SettingsDialog(QWidget):
     default_model_changed = Signal(object)
     back_requested = Signal()
     automatic_memory_changed = Signal(bool)
+    memory_recall_changed = Signal(bool)
     appearance_changed = Signal(str)
     return_sends_changed = Signal(bool)
     rescan_requested = Signal()
@@ -222,6 +224,9 @@ class SettingsDialog(QWidget):
             as_bool(self._settings.value(KEY_AUTO_MEMORY, True), True)
         )
         self._automatic_memory.blockSignals(blocked)
+        blocked = self._memory_recall.blockSignals(True)
+        self._memory_recall.setChecked(as_bool(self._settings.value(KEY_MEMORY_RECALL, True), True))
+        self._memory_recall.blockSignals(blocked)
         self._reload_engine_paths()
         self._models_error.hide()
         if self._api is not None:
@@ -264,7 +269,7 @@ class SettingsDialog(QWidget):
         self._api_status.setWordWrap(True)
         hint = QLabel(
             "Connect local tools using an OpenAI-compatible API. It shares the model with "
-            "chat and Second Brain, so only one request can run at a time. "
+            "chat and Memoria, so only one request can run at a time. "
             "API messages are not saved and do not use your notes. "
             "The API is available only on this computer and starts disabled each launch. "
             "Clients must send the API key (most apps have an API key field for it).", page,
@@ -413,16 +418,21 @@ class SettingsDialog(QWidget):
         self._automatic_memory = QCheckBox("Automatically remember chats", page)
         self._automatic_memory.setObjectName("automaticMemoryCheck")
         self._automatic_memory.toggled.connect(self._on_automatic_memory)
+        self._memory_recall = QCheckBox("Use relevant memories in chats", page)
+        self._memory_recall.setObjectName("memoryRecallCheck")
+        self._memory_recall.toggled.connect(self._on_memory_recall)
         memory_hint = QLabel(
-            "After regular chats, your local AI selects useful facts, preferences, and decisions "
-            "and connects them in Second Brain. Repeated or unhelpful details are filtered out. "
-            "You can review and edit saved memories there. "
-            "Private chats never use or add memories.",
+            "Memoria keeps useful facts, preferences, and decisions from your chats as linked "
+            "notes you can review and edit. Remembering uses your local AI once a chat has been "
+            "quiet for two minutes, or when you move to another chat, and stops the moment you "
+            "send a message. Using memories adds related notes to your prompts. Turn both off "
+            "to pause Memoria; saved notes are kept. Private chats never use or add memories.",
             page,
         )
         memory_hint.setObjectName("settingsHint")
         memory_hint.setWordWrap(True)
-        form.addRow("Second Brain", self._automatic_memory)
+        form.addRow("Memoria", self._automatic_memory)
+        form.addRow("", self._memory_recall)
         form.addRow("", memory_hint)
         return page
 
@@ -539,6 +549,10 @@ class SettingsDialog(QWidget):
     def _on_automatic_memory(self, checked: bool) -> None:
         self._settings.setValue(KEY_AUTO_MEMORY, checked)
         self.automatic_memory_changed.emit(checked)
+
+    def _on_memory_recall(self, checked: bool) -> None:
+        self._settings.setValue(KEY_MEMORY_RECALL, checked)
+        self.memory_recall_changed.emit(checked)
 
     def _on_return_sends(self, checked: bool) -> None:
         self._settings.setValue(KEY_RETURN_SENDS, checked)

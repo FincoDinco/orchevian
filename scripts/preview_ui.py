@@ -386,7 +386,7 @@ def main() -> None:
                 "Local-first workspace",
                 "# Local-first workspace\n\n"
                 "Keep conversations, models, and knowledge on this device. "
-                "The second brain belongs inside the workspace, close to the work.\n\n"
+                "Memoria belongs inside the workspace, close to the work.\n\n"
                 "## Connected ideas\n\n- [[Connected notes]]\n- [[Focused writing]]\n"
                 "- [[Research practice]]\n\n#workspace #local-first",
             )
@@ -425,16 +425,16 @@ def main() -> None:
                 raise RuntimeError(window._memory._status.text())
             window._sidebar.select_section(MEMORY)
             window._on_appearance("dark")
-            capture("second-brain-dark")
+            capture("memoria-dark")
             window._memory._tabs.setCurrentIndex(2)
-            capture("second-brain-graph-dark")
+            capture("memoria-graph-dark")
             window._on_appearance("light")
-            capture("second-brain-graph-light")
+            capture("memoria-graph-light")
             window._memory._tabs.setCurrentIndex(1)
-            capture("second-brain-editor-light")
+            capture("memoria-editor-light")
             window.resize(1024, 680)
             window._memory._tabs.setCurrentIndex(0)
-            capture("second-brain-compact")
+            capture("memoria-compact")
         finally:
             window.close()
             registry.close()

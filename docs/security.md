@@ -53,7 +53,7 @@ limits request bodies to 4 MB and replies to 32,768 tokens, and keeps no message
   sanitized.
 - **Downloaded models** stay inside your model folder, existing files are never overwritten,
   and Hugging Face files are checked against their published SHA-256 checksums.
-- **Second Brain** notes can't be written outside the notes folder, and linked files are
+- **Memoria** notes can't be written outside the notes folder, and linked files are
   refused.
 
 ## Supply chain

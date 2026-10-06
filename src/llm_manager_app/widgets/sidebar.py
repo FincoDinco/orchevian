@@ -26,7 +26,7 @@ from llm_manager_app.tokens import current_palette, named_tab_width, qcolor
 from llm_manager_app.widgets.conversation_list import ConversationStore
 from llm_manager_app.widgets.settings import APP_NAME
 
-_TAB_NAMES = ("Chats", "Models", "Memory", "Templates")
+_TAB_NAMES = ("Chats", "Models", "Memoria", "Templates")
 _EXPANDED_MIN = 260
 
 CHATS = "chats"
@@ -378,7 +378,7 @@ class Sidebar(QWidget):
         self._project_items = project_items
         root.appendRow(all_item)
         root.appendRow(models)
-        memory = _item("Memory" if self._collapsed else "Second Brain", MEMORY)
+        memory = _item("Memoria", MEMORY)
         memory.setIcon(icon("brain"))
         memory.setFont(font)
         self._memory_item = memory
@@ -517,7 +517,7 @@ class Sidebar(QWidget):
             self._conversations.setVisible(not self._collapsed)
             self._layout.setStretch(4, 1 if self._collapsed else 0)
         if self._memory_item is not None:
-            self._memory_item.setText("Memory" if self._collapsed else "Second Brain")
+            self._memory_item.setText("Memoria")
         if self._all_item is not None:
             self._view.setRowHidden(self._all_item.row(), QModelIndex(), self._collapsed)
         rows = 3 if self._collapsed else 4 + len(self._project_items)

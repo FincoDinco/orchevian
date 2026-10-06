@@ -49,13 +49,13 @@ The code is split in two packages with a strict boundary:
 
 | Service | Responsibility |
 | --- | --- |
-| `ChatService` | Saves the user's message, runs generation on a worker thread, streams tokens, saves the reply. Adds the date note, project guidance, document excerpts, Second Brain notes and web evidence to one leading system message. |
+| `ChatService` | Saves the user's message, runs generation on a worker thread, streams tokens, saves the reply. Adds the date note, project guidance, document excerpts, Memoria notes and web evidence to one leading system message. |
 | `ModelSession` | Holds the one loaded model; loads, unloads and force-stops it. |
 | `CatalogService` | Lists installed models from all backends. |
 | `DocumentService` | Imports attachments and project files, extracts text in a worker process, and selects bounded excerpts for each reply. |
 | `ArtifactService` | Asks the model for a validated file specification and writes Word, PDF, Excel, PowerPoint, HTML, chart and data files in a worker process, with versions. |
 | `WebSearchService` | Runs web search for a message and keeps the evidence used. |
-| `memory.capture` | Extracts grounded notes from a finished chat into the Second Brain vault. |
+| `memory.capture` | Extracts grounded notes from a finished chat into the Memoria notes folder. |
 | `DiscoveryService`, `DownloadService` | Search Hugging Face and Ollama, estimate fit to the computer's memory, and download with checksum verification. |
 | `ApiServerService` | The optional OpenAI-compatible API, sharing the chat model session. |
 
@@ -89,7 +89,7 @@ feature that adds context merges into it rather than adding another.
 | Data | Where |
 | --- | --- |
 | Chats, projects, attachments, created files, search evidence | SQLite database `data.db` (WAL mode), in the data folder |
-| Second Brain notes | Markdown files in `second-brain/`; files are the source of truth |
+| Memoria notes | Markdown files in `memoria/` (or an existing `second-brain/`); files are the source of truth |
 | Model folder and API port | `config.json` |
 | Interface preferences | Qt settings |
 | Search and API keys | System password vault via `keyring`; owner-only settings file where no vault exists |
@@ -130,11 +130,13 @@ enough of its topic; at most three pages and 8,000 characters reach the model, m
 untrusted reference data. Page reading runs in a worker process that accepts only public
 addresses, re-checks redirects, and stops after 45 seconds.
 
-### Second Brain
+### Memoria
 
 Notes are Markdown with `[[wiki links]]`, backlinks and a graph view. Capture uses the
 chat's own model, requires a conversation quote as evidence (normalizing whitespace and
-list markers), and runs only when the model is idle. Generated personal notes require
+list markers), and runs only when the model is idle: automatic capture waits until a chat
+has been quiet for two minutes or the user moves to another chat, and a message sent
+during it cancels it and is answered first. Generated personal notes require
 evidence from a user message. Later chats recall up to four keyword matches plus up to
 six `about-me` notes, without duplicates or source transcripts.
 
@@ -149,7 +151,7 @@ session with chat, so a busy session answers with HTTP 429.
 
 The interface follows Apple's design language.
 
-- **Layout:** a sidebar (chats, models, Second Brain, templates, projects) and one main
+- **Layout:** a sidebar (chats, models, Memoria, templates, projects) and one main
   workspace. Settings and project homes open inside the workspace, not as separate
   windows.
 - **Visual tokens** live in `llm_manager_app/tokens.py`: a light and a dark palette,

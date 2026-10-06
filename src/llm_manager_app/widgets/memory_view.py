@@ -1,4 +1,4 @@
-"""An integrated Second Brain: note editor, Markdown reader, backlinks, and graph."""
+"""Memoria: linked notes with an editor, Markdown reader, backlinks, and graph."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ class MemoryView(QWidget):
         self._busy = False
         self._capture_available = False
 
-        title = QLabel("Second Brain", self)
+        title = QLabel("Memoria", self)
         title.setObjectName("pageTitle")
         subtitle = QLabel("A place for ideas to grow and connect.", self)
         subtitle.setObjectName("pageSubtitle")
@@ -295,7 +295,7 @@ class MemoryView(QWidget):
         palette = current_palette()
         if self._active is None:
             body = (
-                "# Build your Second Brain\n\nCreate a note, or use **Remember chat** to let "
+                "# Start your Memoria\n\nCreate a note, or use **Remember chat** to let "
                 "your model extract useful memories from a conversation.\n\n"
                 "Connect notes with `[[Note title]]`. Follow their connections here, "
                 "or explore the **Graph**."
@@ -476,7 +476,7 @@ class MemoryView(QWidget):
         if not self.prepare_close():
             return
         chosen = QFileDialog.getExistingDirectory(
-            self, "Choose a Second Brain vault", str(self.vault.root)
+            self, "Choose the Memoria notes folder", str(self.vault.root)
         )
         if chosen:
             self.vault = MemoryVault(Path(chosen))

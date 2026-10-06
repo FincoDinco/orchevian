@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt, QThread, QTimer, Signal
@@ -83,6 +84,9 @@ from llm_manager_app.workers import (
 )
 
 _TITLE = APP_NAME
+# Automatic memories wait until a chat has been quiet this long, or until the person
+# moves to another chat, and step aside the moment they send something.
+AUTO_MEMORY_QUIET_SECONDS = 120
 
 
 def _default_library() -> tuple[ConversationStore, object]:
@@ -144,15 +148,21 @@ class MainWindow(QMainWindow):
         self._private_id: int | None = None
         self._private_return_draft = ""
         self._private_return_inspector = False
-        self._pending_memories: set[int] = set()
+        # Conversation id -> when its last reply finished (time.monotonic()).
+        self._pending_memories: dict[int, float] = {}
         self._automatic_capture = False
+        self._memory_cid: int | None = None
+        self._memory_yielded = False
         self._memory_busy = False
         self._memory_cancel = threading.Event()
         self._model_load_cancel = threading.Event()
         self._chat_cancel = threading.Event()
         self._stop_requested = False
         db_path = library._store.path if isinstance(library, LibraryService) else resolve_db_path()
-        vault_path = self._settings.value("memory/vault", str(db_path.parent / "second-brain"))
+        # Notes made before Memoria had its name stay where they are.
+        earlier = db_path.parent / "second-brain"
+        default_vault = earlier if earlier.exists() else db_path.parent / "memoria"
+        vault_path = self._settings.value("memory/vault", str(default_vault))
         self._memory_vault = memory_vault or MemoryVault(Path(str(vault_path)))
 
         self._chat_service: ChatService | None = None
@@ -644,7 +654,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(models_act)
         self._shortcut_models = models_act
 
-        memory_act = QAction("Second Brain", self)
+        memory_act = QAction("Memoria", self)
         memory_act.setObjectName("memoryAction")
         memory_act.setShortcut(QKeySequence("Ctrl+3"))
         memory_act.triggered.connect(lambda: self._sidebar.select_section(MEMORY))
@@ -832,6 +842,8 @@ class MainWindow(QMainWindow):
             self._settings_dialog.return_sends_changed.connect(self._chat_view.set_return_sends)
             self._settings_dialog.rescan_requested.connect(self._rescan_catalog)
             self._settings_dialog.automatic_memory_changed.connect(self._on_automatic_memory)
+            # The Memoria page has the same switch; keep the two in step.
+            self._settings_dialog.memory_recall_changed.connect(self._memory._recall.setChecked)
             self._settings_dialog.web_search_keys_changed.connect(self._on_search_keys)
             self._settings_dialog.back_requested.connect(
                 lambda: self._sidebar.select_section(CHATS)
@@ -1085,7 +1097,20 @@ class MainWindow(QMainWindow):
         self.model_load_requested.emit(ref, self._model_load_cancel)
         self._sync_model_activity()
 
+    def _yield_automatic_memory(self) -> None:
+        """A message always goes first: stop automatic remembering and try again later.
+
+        The worker handles one request at a time, so the message runs as soon as the
+        stopped capture returns.
+        """
+        if self._memory_busy and self._automatic_capture and not self._memory_cancel.is_set():
+            self._memory_yielded = True
+            self._memory_cancel.set()
+            if self._memory_cid is not None:
+                self._pending_memories[self._memory_cid] = time.monotonic()
+
     def _queue_send(self, cid: int, text: str, params: object) -> None:
+        self._yield_automatic_memory()
         self._stop_requested = False
         self._chat_cancel = threading.Event()
         self.chat_send_requested.emit(
@@ -1094,6 +1119,7 @@ class MainWindow(QMainWindow):
         )
 
     def _queue_regenerate(self, cid: int, params: object) -> None:
+        self._yield_automatic_memory()
         self._stop_requested = False
         self._chat_cancel = threading.Event()
         self.chat_regenerate_requested.emit(
@@ -1292,7 +1318,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"Settings — {_TITLE}")
             return
         if self._sidebar.current_section() == MEMORY:
-            self.setWindowTitle(f"Second Brain — {_TITLE}")
+            self.setWindowTitle(f"Memoria — {_TITLE}")
             return
         if self._sidebar.current_section() == MODELS:
             self.setWindowTitle(f"Models — {_TITLE}")
@@ -1334,11 +1360,14 @@ class MainWindow(QMainWindow):
         if cid < 0:
             return
         self._automatic_capture = automatic
+        self._memory_cid = cid
         self._memory_busy = True
         self._memory_cancel = threading.Event()
         self._memory.set_busy(True)
         self._memory.set_status("Creating connected memories from this conversation…")
-        self._chat_view.set_session_busy(True)
+        if not automatic:
+            # Automatic remembering leaves the composer free; sending interrupts it.
+            self._chat_view.set_session_busy(True)
         self._models.set_chat_busy(True)
         self.memory_requested.emit(cid, self._memory_vault, self._memory_cancel)
 
@@ -1347,7 +1376,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         if (not self._closing and cid >= 0 and not cancelled and chunks > 0
                 and as_bool(self._settings.value(KEY_AUTO_MEMORY, True), True)):
-            self._pending_memories.add(cid)
+            self._pending_memories[cid] = time.monotonic()
 
     def _drain_automatic_memories(self) -> None:
         service = self._chat_service
@@ -1358,8 +1387,14 @@ class MainWindow(QMainWindow):
                 or self._session.status().generating or self._models.job_kind() is not None
                 or not as_bool(self._settings.value(KEY_AUTO_MEMORY, True), True)):
             return
-        cid = min(self._pending_memories)
-        self._pending_memories.discard(cid)
+        now = time.monotonic()
+        current = self._chat_view.conversation_id()
+        ready = [cid for cid, finished in self._pending_memories.items()
+                 if cid != current or now - finished >= AUTO_MEMORY_QUIET_SECONDS]
+        if not ready:
+            return
+        cid = min(ready)
+        del self._pending_memories[cid]
         try:
             conversation = service.get_conversation(cid)
         except EngineError:
@@ -1379,22 +1414,27 @@ class MainWindow(QMainWindow):
 
     def _finish_memory(self) -> None:
         self._automatic_capture = False
+        self._memory_cid = None
         self._memory_busy = False
         self._memory.set_busy(False)
         self._chat_view.set_session_busy(False)
-        self._models.set_chat_busy(False)
+        # A message sent during automatic remembering may already be running.
+        self._models.set_chat_busy(
+            self._chat_view.is_streaming() or self._chat_view._pending is not None
+        )
         self._models.sync_from_session()
         self._sync_memory_available()
         self._sync_model_activity()
 
     def _on_memories_created(self, result: object) -> None:
         automatic = self._automatic_capture
+        self._memory_yielded = False
         self._finish_memory()
         if not isinstance(result, CaptureResult):
             return
         if result.already_saved:
             self._memory.set_status(
-                "This version of the conversation is already in your Second Brain."
+                "This version of the conversation is already in Memoria."
             )
         elif result.notes:
             count = len(result.notes)
@@ -1407,8 +1447,13 @@ class MainWindow(QMainWindow):
         self._memory.refresh(select_key=result.notes[0] if result.notes and not automatic else None)
 
     def _on_memories_failed(self, _code: str, message: str) -> None:
+        yielded = self._memory_yielded
+        self._memory_yielded = False
         self._finish_memory()
-        self._memory.set_status(message)
+        self._memory.set_status(
+            "Paused so your message could go first. Memoria will try again once the "
+            "chat is quiet." if yielded else message
+        )
 
     def _on_memory_recall(self, enabled: bool) -> None:
         self._settings.setValue("memory/recall", enabled)

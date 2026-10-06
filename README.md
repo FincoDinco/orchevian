@@ -22,7 +22,7 @@ to, and keep a personal knowledge base. Your conversations stay on your machine.
   data file at any point in a chat, then preview, revise, and save it.
 - **Optional web search.** Turn it on for a single question. It works with no setup
   and no account; you can add your own free search key for a bigger allowance.
-- **Second Brain.** Useful facts from your chats become linked, editable Markdown
+- **Memoria.** Useful facts from your chats become linked, editable Markdown
   notes with an interactive graph, and relevant notes are recalled in later chats.
 - **Private Chat.** A session that is never saved, never remembered, and cleared
   when you close it.

@@ -30,7 +30,7 @@ To render screenshots of the real interface with temporary sample data and fake 
 uv run python scripts/preview_ui.py --output /tmp/orchevian-preview
 ```
 
-This preview does not access your conversations, installed models, or backend services. It covers both themes, welcome and chat states, model details, Second Brain capture, notes and graphs, and compact layouts.
+This preview does not access your conversations, installed models, or backend services. It covers both themes, welcome and chat states, model details, Memoria capture, notes and graphs, and compact layouts.
 
 ## Real-model checks
 
