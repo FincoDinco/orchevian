@@ -14,6 +14,7 @@ Everything Orchevian does, feature by feature. For installation, see the
 - [Templates](#templates)
 - [Private Chat](#private-chat)
 - [Settings](#settings)
+- [Updates and support](#updates-and-support)
 - [Stopping a stuck model](#stopping-a-stuck-model)
 - [Model runtimes](#model-runtimes)
 - [Data locations](#data-locations)
@@ -189,7 +190,7 @@ Limits: eight files/request, 120,000 characters of model output, 20 MB/output fi
 
 ## Memoria
 
-Memoria (called Second Brain before 1.0.1) keeps what is worth remembering from your chats as linked notes. Two switches in **Settings → General → Memoria** control it, and both are on by default:
+Memoria (called Second Brain before 1.1.0) keeps what is worth remembering from your chats as linked notes. Two switches in **Settings → General → Memoria** control it, and both are on by default:
 
 - **Automatically remember chats.** Once a chat has been quiet for two minutes, or when you move to another chat, the local model selects durable facts, preferences, decisions, and useful ideas, filters out unhelpful or repeated material, and adds connected notes. Notes require exact conversation evidence and remain editable. Remembering uses the same model session, but it never holds up a reply: sending a message stops it at once, and it tries again once the chat is quiet. The activity pill at the top of the workspace shows its progress and **Stop** ends it. Turning the setting off cancels automatic remembering and leaves existing notes intact. It applies to new completed responses, without scanning old chats on startup.
 - **Use relevant memories in chats.** Adds related notes to your prompts (details below). The same switch is on the Memoria page.
@@ -198,13 +199,13 @@ Turn both off to pause Memoria completely; your saved notes are kept.
 
 **Memoria** stores editable Markdown notes with `[[wiki links]]`, backlinks, search, and an interactive graph. Create notes yourself or select **Remember chat** to extract up to six memories using the conversation's local model. Generated notes include an evidence quote, model attribution, and a linked snapshot of the conversation. Repeating capture on an already saved conversation version reuses its memories.
 
-Notes live in `memoria/` beside your database by default; libraries started before 1.0.1 keep their `second-brain/` folder. **Choose vault…** opens another folder, including an existing Markdown vault. Notes can be edited outside the app; select **Refresh notes** to pick up changes. Saving reports a conflict when a note has changed on disk. Deleted notes move to the vault's `.trash/` folder.
+Notes live in `memoria/` beside your database by default; libraries started before 1.1.0 keep their `second-brain/` folder. **Choose vault…** opens another folder, including an existing Markdown vault. Notes can be edited outside the app; select **Refresh notes** to pick up changes. Saving reports a conflict when a note has changed on disk. Deleted notes move to the vault's `.trash/` folder.
 
 **Use relevant memories in chats** is enabled by default. It adds up to four notes matched by keywords plus up to six notes tagged `about-me`, excluding source transcripts and duplicates. Personal notes can help even when your question uses different words. Generated personal notes must cite your own messages; assistant statements alone cannot add them to your profile. Evidence matching tolerates whitespace and Markdown list markers. You can add or remove the `about-me` tag in a note, or turn recall off in Memoria or Settings to chat without recalled notes.
 
 ## Templates
 
-**Templates** in the sidebar (Ctrl/⌘5) stores reusable chat guidance and starter messages. Create a template with a name, optional description, guidance, and a starter message; use search to find it by name or description. **Save** keeps changes locally. **Use in new chat** saves any edits, creates an unassigned conversation using the app's default model, and places the starter message in the composer for editing. It does not send or load a model. Choose a model if no app default is set.
+**Templates** in the sidebar (Ctrl/⌘5) stores reusable chat guidance and starter messages. The page opens on a blank template, so you can start typing straight away. Give it a name, optional description, guidance, and a starter message, then select **Save**; use search to find it by name or description. **Save** keeps changes locally. **Use in new chat** saves any edits, creates an unassigned conversation using the app's default model, and places the starter message in the composer for editing. It does not send or load a model. Choose a model if no app default is set.
 
 Templates copy their guidance into a new chat. Editing or deleting a template leaves existing chats intact. Unsent regular chat drafts are kept separately per conversation during the app session, including when using a template. Template edits stay in the editor when navigating to another workspace; switching templates, creating another template, or quitting offers Save, Discard, or Cancel for unsaved changes. Template navigation is disabled in Private Chat.
 
@@ -215,6 +216,12 @@ Templates copy their guidance into a new chat. Editing or deleting a template le
 ## Settings
 
 **Settings** stays inside the main workspace. Open it from the sidebar or Ctrl/⌘, and use **Back to chats** or the sidebar to return.
+
+## Updates and support
+
+Orchevian checks GitHub once a day for a newer release; the first check comes about 15 seconds after it opens. When one is out, **Update to** *version* appears in the toolbar. Select it to see **Download**, which downloads the installer for your computer (on a Mac, the disk image), **What's New**, **Skip This Version**, or **Later**. Open the downloaded installer to update, as you did the first time; chats, notes, and settings stay in place. **Help → Check for Updates** (in the Orchevian menu on macOS) checks at any time. Turn off **Settings → General → Check for updates automatically** to stop the daily check; it sends nothing about you or your chats.
+
+For help, use **Help → Orchevian Website**, **Help → Contact Support** (support@orchevian.com), or the links in **About Orchevian**. **Help → Buy Me a Coffee** supports development.
 
 ## Stopping a stuck model
 

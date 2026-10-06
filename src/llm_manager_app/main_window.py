@@ -8,8 +8,8 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSize, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtCore import QSettings, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -36,11 +36,13 @@ from llm_engine.services.openai_api import ApiServerService, new_api_key
 from llm_engine.services.session import ModelSession
 from llm_engine.store.library import LibraryService
 from llm_engine.store.vault import MemoryVault
+from llm_manager_app import __version__, updates
 from llm_manager_app.icons import icon
 from llm_manager_app.model_names import ModelNames
 from llm_manager_app.model_preferences import default_model
 from llm_manager_app.secret_store import API_KEY_SECRET, SecretStore, SecretStoreError
 from llm_manager_app.tokens import apply_studio
+from llm_manager_app.widgets.about import DONATE_URL, SUPPORT_EMAIL, WEBSITE_URL
 from llm_manager_app.widgets.chat_view import ChatView
 from llm_manager_app.widgets.conversation_list import ConversationList, ConversationStore
 from llm_manager_app.widgets.downloads_view import DownloadsPopover
@@ -51,9 +53,11 @@ from llm_manager_app.widgets.project_sheet import ProjectSheet
 from llm_manager_app.widgets.settings import (
     APP_NAME,
     KEY_AUTO_MEMORY,
+    KEY_CHECK_UPDATES,
     KEY_INSPECTOR_OPEN,
     KEY_LAST_CONVERSATION_ID,
     KEY_RETURN_SENDS,
+    KEY_SKIPPED_UPDATE,
     ORG_NAME,
     SettingsDialog,
     ShortcutsDialog,
@@ -103,6 +107,8 @@ class MainWindow(QMainWindow):
     model_load_requested = Signal(object, object)
     chat_send_requested = Signal(int, str, object, object, object, bool)
     chat_regenerate_requested = Signal(int, object, object, object, bool)
+    # (Update or None, checked by the person, error text): from the checking thread.
+    update_checked = Signal(object, bool, str)
 
     def __init__(
         self,
@@ -371,6 +377,14 @@ class MainWindow(QMainWindow):
         self._shortcuts_dialog: ShortcutsDialog | None = None
         self._build_menus()
         self._build_toolbar()
+        self._available_update = None
+        self._update_checking = False
+        self.update_checked.connect(self._on_update_checked)
+        # First look 15 seconds after opening, then once a day while Orchevian runs.
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._auto_check_updates)
+        if updates.automatic_checks_allowed():
+            self._update_timer.start(15_000)
 
         # Escape is a QShortcut so dialogs can still consume it; other keys are QActions.
         self._shortcut_stop = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
@@ -548,6 +562,13 @@ class MainWindow(QMainWindow):
         spacer = QWidget(toolbar)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
+        self._update_button = QToolButton(toolbar)
+        self._update_button.setObjectName("updateButton")
+        self._update_button.setIcon(icon("update"))
+        self._update_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._update_button.clicked.connect(self._show_update)
+        self._update_action = toolbar.addWidget(self._update_button)
+        self._update_action.setVisible(False)
         self._private_button = QToolButton(toolbar)
         self._private_button.setObjectName("privateChatButton")
         self._private_button.setText("Private Chat")
@@ -700,6 +721,24 @@ class MainWindow(QMainWindow):
         shortcuts_act.setObjectName("shortcutsAction")
         shortcuts_act.triggered.connect(self._open_shortcuts)
         help_menu.addAction(shortcuts_act)
+        updates_act = QAction("Check for Updates…", self)
+        updates_act.setObjectName("checkUpdatesAction")
+        # macOS lists this in the application menu, where people look for it.
+        updates_act.setMenuRole(QAction.MenuRole.ApplicationSpecificRole)
+        updates_act.triggered.connect(lambda: self._check_for_updates(manual=True))
+        help_menu.addAction(updates_act)
+        help_menu.addSeparator()
+        for text, url, name in (
+            ("Orchevian Website", WEBSITE_URL, "websiteAction"),
+            ("Contact Support", f"mailto:{SUPPORT_EMAIL}", "supportAction"),
+            ("Buy Me a Coffee", DONATE_URL, "donateAction"),
+        ):
+            link = QAction(text, self)
+            link.setObjectName(name)
+            link.triggered.connect(
+                lambda _checked=False, url=url: QDesktopServices.openUrl(QUrl(url))
+            )
+            help_menu.addAction(link)
         help_menu.addSeparator()
         # macOS moves these roles into the application menu.
         about_act = QAction("About Orchevian", self)
@@ -842,6 +881,7 @@ class MainWindow(QMainWindow):
             self._settings_dialog.return_sends_changed.connect(self._chat_view.set_return_sends)
             self._settings_dialog.rescan_requested.connect(self._rescan_catalog)
             self._settings_dialog.automatic_memory_changed.connect(self._on_automatic_memory)
+            self._settings_dialog.check_updates_changed.connect(self._on_check_updates_setting)
             # The Memoria page has the same switch; keep the two in step.
             self._settings_dialog.memory_recall_changed.connect(self._memory._recall.setChecked)
             self._settings_dialog.web_search_keys_changed.connect(self._on_search_keys)
@@ -861,6 +901,85 @@ class MainWindow(QMainWindow):
         self._shortcuts_dialog.show()
         self._shortcuts_dialog.raise_()
         self._shortcuts_dialog.activateWindow()
+
+    def _auto_check_updates(self) -> None:
+        self._update_timer.setInterval(24 * 60 * 60 * 1000)
+        if not self._closing and as_bool(self._settings.value(KEY_CHECK_UPDATES, True), True):
+            self._check_for_updates(manual=False)
+
+    def _check_for_updates(self, *, manual: bool) -> None:
+        if self._update_checking or self._closing:
+            return
+        self._update_checking = True
+
+        def check() -> None:
+            try:
+                found, error = updates.newer_release(), ""
+            except Exception as exc:  # Offline, rate-limited, or GitHub is down.
+                found, error = None, str(exc) or type(exc).__name__
+            self.update_checked.emit(found, manual, error)
+
+        threading.Thread(target=check, daemon=True, name="update-check").start()
+
+    def _on_update_checked(self, found: object, manual: bool, error: str) -> None:
+        self._update_checking = False
+        if self._closing:
+            return
+        if isinstance(found, updates.Update):
+            self._available_update = found
+            skipped = str(self._settings.value(KEY_SKIPPED_UPDATE, "") or "")
+            if manual or found.version != skipped:
+                self._update_button.setText(f"Update to {found.version}")
+                self._update_button.setToolTip(f"Orchevian {found.version} is available")
+                self._update_action.setVisible(True)
+            if manual:
+                self._show_update()
+        elif manual:
+            if error:
+                QMessageBox.warning(
+                    self, "Check for Updates",
+                    f"Orchevian couldn't reach GitHub to check for updates.\n\n{error}",
+                )
+            else:
+                QMessageBox.information(self, "Check for Updates",
+                                        f"Orchevian {__version__} is the latest version.")
+
+    def _show_update(self) -> None:
+        update = self._available_update
+        if not isinstance(update, updates.Update):
+            return
+        box = QMessageBox(self)
+        box.setObjectName("updateDialog")
+        box.setWindowTitle("Update Available")
+        box.setText(f"Orchevian {update.version} is available. You have {__version__}.")
+        box.setInformativeText(
+            "Download gets the installer for this computer. Open it to install the update, "
+            "as you did the first time; your chats, notes, and settings stay as they are."
+            if update.file_name else
+            "There's no installer for this computer in this release; the release page "
+            "has the downloads."
+        )
+        download = box.addButton("Download", QMessageBox.ButtonRole.AcceptRole)
+        notes = box.addButton("What's New", QMessageBox.ButtonRole.HelpRole)
+        skip = box.addButton("Skip This Version", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(download)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is download:
+            QDesktopServices.openUrl(QUrl(update.download_url))
+        elif clicked is notes:
+            QDesktopServices.openUrl(QUrl(update.notes_url))
+        elif clicked is skip:
+            self._settings.setValue(KEY_SKIPPED_UPDATE, update.version)
+            self._update_action.setVisible(False)
+
+    def _on_check_updates_setting(self, enabled: bool) -> None:
+        if enabled and updates.automatic_checks_allowed():
+            if not self._update_timer.isActive():
+                self._update_timer.start(15_000)
+        else:
+            self._update_timer.stop()
 
     def _open_about(self) -> None:
         from llm_manager_app.widgets.about import AboutDialog

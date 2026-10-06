@@ -7,8 +7,12 @@ This page explains what that means in practice. To report a problem, see
 
 ## What leaves your computer
 
-Nothing, unless you ask for it:
+Only these, and each one can be turned off:
 
+- **Update checks**, once a day while Orchevian runs, unless you turn off
+  **Settings → General → Check for updates automatically**. This is one request to
+  GitHub's public releases API with no account, cookies or chat content; GitHub sees
+  only what any web request carries, such as your IP address.
 - **Web search**, only when you turn it on for a message. Up to 500 characters of that
   question go to the search service (Exa's free search, or a service you added a key for),
   which may keep it under its own privacy policy. Files and saved chats are never sent.

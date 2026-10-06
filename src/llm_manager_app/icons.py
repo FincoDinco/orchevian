@@ -69,6 +69,11 @@ class _LineIcon(QIconEngine):
             painter.drawRoundedRect(QRectF(4, 4, 16, 13), 3, 3)
             painter.drawLine(7, 17, 7, 21)
             painter.drawLine(7, 21, 12, 17)
+        elif self.name == "update":
+            painter.drawEllipse(QRectF(3, 3, 18, 18))
+            painter.drawLine(12, 17, 12, 8)
+            painter.drawLine(8, 12, 12, 8)
+            painter.drawLine(16, 12, 12, 8)
         elif self.name == "download":
             painter.drawLine(12, 3, 12, 15)
             painter.drawLine(7, 10, 12, 15)

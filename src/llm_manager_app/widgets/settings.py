@@ -42,6 +42,8 @@ APP_NAME = "Orchevian"
 
 KEY_AUTO_MEMORY = "memory/automatic"
 KEY_MEMORY_RECALL = "memory/recall"
+KEY_CHECK_UPDATES = "updates/check"
+KEY_SKIPPED_UPDATE = "updates/skipped"
 KEY_APPEARANCE = "appearance"
 KEY_RETURN_SENDS = "return_sends"
 KEY_INSPECTOR_OPEN = "inspector_open"
@@ -146,6 +148,7 @@ class SettingsDialog(QWidget):
     back_requested = Signal()
     automatic_memory_changed = Signal(bool)
     memory_recall_changed = Signal(bool)
+    check_updates_changed = Signal(bool)
     appearance_changed = Signal(str)
     return_sends_changed = Signal(bool)
     rescan_requested = Signal()
@@ -227,6 +230,9 @@ class SettingsDialog(QWidget):
         blocked = self._memory_recall.blockSignals(True)
         self._memory_recall.setChecked(as_bool(self._settings.value(KEY_MEMORY_RECALL, True), True))
         self._memory_recall.blockSignals(blocked)
+        blocked = self._check_updates.blockSignals(True)
+        self._check_updates.setChecked(as_bool(self._settings.value(KEY_CHECK_UPDATES, True), True))
+        self._check_updates.blockSignals(blocked)
         self._reload_engine_paths()
         self._models_error.hide()
         if self._api is not None:
@@ -434,6 +440,19 @@ class SettingsDialog(QWidget):
         form.addRow("Memoria", self._automatic_memory)
         form.addRow("", self._memory_recall)
         form.addRow("", memory_hint)
+        self._check_updates = QCheckBox("Check for updates automatically", page)
+        self._check_updates.setObjectName("checkUpdatesCheck")
+        self._check_updates.toggled.connect(self._on_check_updates)
+        updates_hint = QLabel(
+            "Once a day, Orchevian asks GitHub whether a newer version is out and shows "
+            "Update in the toolbar if there is. Nothing about you or your chats is sent. "
+            "Help → Check for Updates works either way.",
+            page,
+        )
+        updates_hint.setObjectName("settingsHint")
+        updates_hint.setWordWrap(True)
+        form.addRow("Updates", self._check_updates)
+        form.addRow("", updates_hint)
         return page
 
     def _build_models(self) -> QWidget:
@@ -553,6 +572,10 @@ class SettingsDialog(QWidget):
     def _on_memory_recall(self, checked: bool) -> None:
         self._settings.setValue(KEY_MEMORY_RECALL, checked)
         self.memory_recall_changed.emit(checked)
+
+    def _on_check_updates(self, checked: bool) -> None:
+        self._settings.setValue(KEY_CHECK_UPDATES, checked)
+        self.check_updates_changed.emit(checked)
 
     def _on_return_sends(self, checked: bool) -> None:
         self._settings.setValue(KEY_RETURN_SENDS, checked)

@@ -397,7 +397,7 @@ def main() -> int:
     args = parser.parse_args()
     checks: list[str] = []
     report = {"ok": False, "frozen": bool(getattr(sys, "frozen", False)), "checks": checks}
-    overrides = ("QT_QPA_PLATFORM", "ORCHEVIAN_CONFIG", "ORCHEVIAN_DB")
+    overrides = ("QT_QPA_PLATFORM", "ORCHEVIAN_CONFIG", "ORCHEVIAN_DB", "ORCHEVIAN_UPDATE_CHECK")
     previous = {name: os.environ.get(name) for name in overrides}
     try:
         with TemporaryDirectory(prefix="orchevian-smoke-") as temporary:
@@ -405,6 +405,7 @@ def main() -> int:
             os.environ["QT_QPA_PLATFORM"] = "offscreen"
             os.environ["ORCHEVIAN_CONFIG"] = str(root / "config.json")
             os.environ["ORCHEVIAN_DB"] = str(root / "data.db")
+            os.environ["ORCHEVIAN_UPDATE_CHECK"] = "0"  # No GitHub request from a check.
             (root / "config.json").write_text(
                 json.dumps({
                     "model_dir": os.environ.get("ORCHEVIAN_SMOKE_MODEL_DIR", str(root / "models")),

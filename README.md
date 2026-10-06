@@ -75,8 +75,10 @@ How the downloads are built is described in [packaging/README.md](packaging/READ
 ## Privacy
 
 Models run on your computer, and your chats, files, and notes are stored locally.
-Orchevian connects to the internet only when you ask it to:
+Orchevian connects to the internet only for these:
 
+- **Update checks**, once a day, asking GitHub whether a newer version is out. Nothing
+  about you or your chats is sent; turn it off in **Settings → General**.
 - **Web search**, when you turn it on for a message. Up to 500 characters of that
   question go to the search service (Exa's free search by default, or a service you
   added a key for), which may keep it under its own privacy policy. Files and saved chats
@@ -97,17 +99,20 @@ key. See [Security](docs/security.md) for details.
 - [Design](DESIGN.md): architecture and design decisions
 - [License](LICENSE)
 
+## Support
+
+- Website: [orchevian.com](https://orchevian.com)
+- Email: [support@orchevian.com](mailto:support@orchevian.com)
+- Bugs and ideas: [GitHub issues](https://github.com/FincoDinco/orchevian/issues)
+- If Orchevian helps you, you can [buy me a coffee](https://buymeacoffee.com/sethhardin).
+
+The same links are in **Help** and **About Orchevian** inside the app.
+
 ## Project status
 
-Orchevian is approaching its 1.0 release. Remaining work:
-
-- Release validation of the bundled runtimes on macOS, Windows, and Linux.
-- Code signing and macOS notarization.
-- Testing on clean machines for each platform.
-- Checking generated Word, PowerPoint, and Excel files in the native Office apps.
-
-See the [release checklist](docs/release-checklist.md) for validation evidence and
-the remaining acceptance checks.
+Orchevian 1.0 was released in October 2026. The macOS app is signed and notarized; the
+Windows installer is not signed yet, so SmartScreen asks before it runs. See the
+[release checklist](docs/release-checklist.md) for validation evidence.
 
 Orchevian was previously called LLM Manager. Existing chats, models, projects, and
 notes carry over automatically.

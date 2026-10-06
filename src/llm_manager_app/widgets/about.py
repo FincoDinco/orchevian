@@ -1,4 +1,4 @@
-"""Help → About Orchevian: version, copyright, license, and source code."""
+"""Help → About Orchevian: version, support links, copyright, license, and source code."""
 
 from __future__ import annotations
 
@@ -21,6 +21,9 @@ from PySide6.QtWidgets import (
 from llm_manager_app import __version__
 
 SOURCE_URL = "https://github.com/FincoDinco/orchevian"
+WEBSITE_URL = "https://orchevian.com"
+SUPPORT_EMAIL = "support@orchevian.com"
+DONATE_URL = "https://buymeacoffee.com/sethhardin"
 LICENSE_URL = "https://www.gnu.org/licenses/gpl-3.0.html"
 COPYRIGHT = "Copyright © 2026 Seth Hardin"
 # The notice the GPL recommends that interactive programs show.
@@ -67,6 +70,15 @@ class AboutDialog(QDialog):
         tagline = QLabel("A private, local-first AI workspace.", self)
         tagline.setObjectName("pageSubtitle")
         copyright_label = QLabel(COPYRIGHT, self)
+        support = QLabel(
+            f'<a href="{WEBSITE_URL}">orchevian.com</a> · '
+            f'<a href="mailto:{SUPPORT_EMAIL}">{SUPPORT_EMAIL}</a> · '
+            f'<a href="{DONATE_URL}">Buy me a coffee</a>',
+            self,
+        )
+        support.setObjectName("aboutSupport")
+        support.setTextFormat(Qt.TextFormat.RichText)
+        support.setOpenExternalLinks(True)
         notice = QLabel(NOTICE, self)
         notice.setObjectName("settingsHint")
         notice.setWordWrap(True)
@@ -101,6 +113,8 @@ class AboutDialog(QDialog):
         layout.addWidget(name)
         layout.addWidget(version)
         layout.addWidget(tagline)
+        layout.addSpacing(8)
+        layout.addWidget(support)
         layout.addSpacing(12)
         layout.addWidget(copyright_label)
         layout.addSpacing(6)
