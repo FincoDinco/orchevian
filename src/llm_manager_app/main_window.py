@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSize, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtCore import QSettings, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -35,11 +36,13 @@ from llm_engine.services.openai_api import ApiServerService, new_api_key
 from llm_engine.services.session import ModelSession
 from llm_engine.store.library import LibraryService
 from llm_engine.store.vault import MemoryVault
+from llm_manager_app import __version__, updates
 from llm_manager_app.icons import icon
 from llm_manager_app.model_names import ModelNames
 from llm_manager_app.model_preferences import default_model
 from llm_manager_app.secret_store import API_KEY_SECRET, SecretStore, SecretStoreError
 from llm_manager_app.tokens import apply_studio
+from llm_manager_app.widgets.about import DONATE_URL, SUPPORT_EMAIL, WEBSITE_URL
 from llm_manager_app.widgets.chat_view import ChatView
 from llm_manager_app.widgets.conversation_list import ConversationList, ConversationStore
 from llm_manager_app.widgets.downloads_view import DownloadsPopover
@@ -50,9 +53,11 @@ from llm_manager_app.widgets.project_sheet import ProjectSheet
 from llm_manager_app.widgets.settings import (
     APP_NAME,
     KEY_AUTO_MEMORY,
+    KEY_CHECK_UPDATES,
     KEY_INSPECTOR_OPEN,
     KEY_LAST_CONVERSATION_ID,
     KEY_RETURN_SENDS,
+    KEY_SKIPPED_UPDATE,
     ORG_NAME,
     SettingsDialog,
     ShortcutsDialog,
@@ -83,6 +88,9 @@ from llm_manager_app.workers import (
 )
 
 _TITLE = APP_NAME
+# Automatic memories wait until a chat has been quiet this long, or until the person
+# moves to another chat, and step aside the moment they send something.
+AUTO_MEMORY_QUIET_SECONDS = 120
 
 
 def _default_library() -> tuple[ConversationStore, object]:
@@ -99,6 +107,8 @@ class MainWindow(QMainWindow):
     model_load_requested = Signal(object, object)
     chat_send_requested = Signal(int, str, object, object, object, bool)
     chat_regenerate_requested = Signal(int, object, object, object, bool)
+    # (Update or None, checked by the person, error text): from the checking thread.
+    update_checked = Signal(object, bool, str)
 
     def __init__(
         self,
@@ -144,15 +154,21 @@ class MainWindow(QMainWindow):
         self._private_id: int | None = None
         self._private_return_draft = ""
         self._private_return_inspector = False
-        self._pending_memories: set[int] = set()
+        # Conversation id -> when its last reply finished (time.monotonic()).
+        self._pending_memories: dict[int, float] = {}
         self._automatic_capture = False
+        self._memory_cid: int | None = None
+        self._memory_yielded = False
         self._memory_busy = False
         self._memory_cancel = threading.Event()
         self._model_load_cancel = threading.Event()
         self._chat_cancel = threading.Event()
         self._stop_requested = False
         db_path = library._store.path if isinstance(library, LibraryService) else resolve_db_path()
-        vault_path = self._settings.value("memory/vault", str(db_path.parent / "second-brain"))
+        # Notes made before Memoria had its name stay where they are.
+        earlier = db_path.parent / "second-brain"
+        default_vault = earlier if earlier.exists() else db_path.parent / "memoria"
+        vault_path = self._settings.value("memory/vault", str(default_vault))
         self._memory_vault = memory_vault or MemoryVault(Path(str(vault_path)))
 
         self._chat_service: ChatService | None = None
@@ -361,6 +377,14 @@ class MainWindow(QMainWindow):
         self._shortcuts_dialog: ShortcutsDialog | None = None
         self._build_menus()
         self._build_toolbar()
+        self._available_update = None
+        self._update_checking = False
+        self.update_checked.connect(self._on_update_checked)
+        # First look 15 seconds after opening, then once a day while Orchevian runs.
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._auto_check_updates)
+        if updates.automatic_checks_allowed():
+            self._update_timer.start(15_000)
 
         # Escape is a QShortcut so dialogs can still consume it; other keys are QActions.
         self._shortcut_stop = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
@@ -538,6 +562,13 @@ class MainWindow(QMainWindow):
         spacer = QWidget(toolbar)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
+        self._update_button = QToolButton(toolbar)
+        self._update_button.setObjectName("updateButton")
+        self._update_button.setIcon(icon("update"))
+        self._update_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._update_button.clicked.connect(self._show_update)
+        self._update_action = toolbar.addWidget(self._update_button)
+        self._update_action.setVisible(False)
         self._private_button = QToolButton(toolbar)
         self._private_button.setObjectName("privateChatButton")
         self._private_button.setText("Private Chat")
@@ -644,7 +675,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(models_act)
         self._shortcut_models = models_act
 
-        memory_act = QAction("Second Brain", self)
+        memory_act = QAction("Memoria", self)
         memory_act.setObjectName("memoryAction")
         memory_act.setShortcut(QKeySequence("Ctrl+3"))
         memory_act.triggered.connect(lambda: self._sidebar.select_section(MEMORY))
@@ -690,6 +721,24 @@ class MainWindow(QMainWindow):
         shortcuts_act.setObjectName("shortcutsAction")
         shortcuts_act.triggered.connect(self._open_shortcuts)
         help_menu.addAction(shortcuts_act)
+        updates_act = QAction("Check for Updates…", self)
+        updates_act.setObjectName("checkUpdatesAction")
+        # macOS lists this in the application menu, where people look for it.
+        updates_act.setMenuRole(QAction.MenuRole.ApplicationSpecificRole)
+        updates_act.triggered.connect(lambda: self._check_for_updates(manual=True))
+        help_menu.addAction(updates_act)
+        help_menu.addSeparator()
+        for text, url, name in (
+            ("Orchevian Website", WEBSITE_URL, "websiteAction"),
+            ("Contact Support", f"mailto:{SUPPORT_EMAIL}", "supportAction"),
+            ("Buy Me a Coffee", DONATE_URL, "donateAction"),
+        ):
+            link = QAction(text, self)
+            link.setObjectName(name)
+            link.triggered.connect(
+                lambda _checked=False, url=url: QDesktopServices.openUrl(QUrl(url))
+            )
+            help_menu.addAction(link)
         help_menu.addSeparator()
         # macOS moves these roles into the application menu.
         about_act = QAction("About Orchevian", self)
@@ -832,6 +881,9 @@ class MainWindow(QMainWindow):
             self._settings_dialog.return_sends_changed.connect(self._chat_view.set_return_sends)
             self._settings_dialog.rescan_requested.connect(self._rescan_catalog)
             self._settings_dialog.automatic_memory_changed.connect(self._on_automatic_memory)
+            self._settings_dialog.check_updates_changed.connect(self._on_check_updates_setting)
+            # The Memoria page has the same switch; keep the two in step.
+            self._settings_dialog.memory_recall_changed.connect(self._memory._recall.setChecked)
             self._settings_dialog.web_search_keys_changed.connect(self._on_search_keys)
             self._settings_dialog.back_requested.connect(
                 lambda: self._sidebar.select_section(CHATS)
@@ -849,6 +901,85 @@ class MainWindow(QMainWindow):
         self._shortcuts_dialog.show()
         self._shortcuts_dialog.raise_()
         self._shortcuts_dialog.activateWindow()
+
+    def _auto_check_updates(self) -> None:
+        self._update_timer.setInterval(24 * 60 * 60 * 1000)
+        if not self._closing and as_bool(self._settings.value(KEY_CHECK_UPDATES, True), True):
+            self._check_for_updates(manual=False)
+
+    def _check_for_updates(self, *, manual: bool) -> None:
+        if self._update_checking or self._closing:
+            return
+        self._update_checking = True
+
+        def check() -> None:
+            try:
+                found, error = updates.newer_release(), ""
+            except Exception as exc:  # Offline, rate-limited, or GitHub is down.
+                found, error = None, str(exc) or type(exc).__name__
+            self.update_checked.emit(found, manual, error)
+
+        threading.Thread(target=check, daemon=True, name="update-check").start()
+
+    def _on_update_checked(self, found: object, manual: bool, error: str) -> None:
+        self._update_checking = False
+        if self._closing:
+            return
+        if isinstance(found, updates.Update):
+            self._available_update = found
+            skipped = str(self._settings.value(KEY_SKIPPED_UPDATE, "") or "")
+            if manual or found.version != skipped:
+                self._update_button.setText(f"Update to {found.version}")
+                self._update_button.setToolTip(f"Orchevian {found.version} is available")
+                self._update_action.setVisible(True)
+            if manual:
+                self._show_update()
+        elif manual:
+            if error:
+                QMessageBox.warning(
+                    self, "Check for Updates",
+                    f"Orchevian couldn't reach GitHub to check for updates.\n\n{error}",
+                )
+            else:
+                QMessageBox.information(self, "Check for Updates",
+                                        f"Orchevian {__version__} is the latest version.")
+
+    def _show_update(self) -> None:
+        update = self._available_update
+        if not isinstance(update, updates.Update):
+            return
+        box = QMessageBox(self)
+        box.setObjectName("updateDialog")
+        box.setWindowTitle("Update Available")
+        box.setText(f"Orchevian {update.version} is available. You have {__version__}.")
+        box.setInformativeText(
+            "Download gets the installer for this computer. Open it to install the update, "
+            "as you did the first time; your chats, notes, and settings stay as they are."
+            if update.file_name else
+            "There's no installer for this computer in this release; the release page "
+            "has the downloads."
+        )
+        download = box.addButton("Download", QMessageBox.ButtonRole.AcceptRole)
+        notes = box.addButton("What's New", QMessageBox.ButtonRole.HelpRole)
+        skip = box.addButton("Skip This Version", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(download)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is download:
+            QDesktopServices.openUrl(QUrl(update.download_url))
+        elif clicked is notes:
+            QDesktopServices.openUrl(QUrl(update.notes_url))
+        elif clicked is skip:
+            self._settings.setValue(KEY_SKIPPED_UPDATE, update.version)
+            self._update_action.setVisible(False)
+
+    def _on_check_updates_setting(self, enabled: bool) -> None:
+        if enabled and updates.automatic_checks_allowed():
+            if not self._update_timer.isActive():
+                self._update_timer.start(15_000)
+        else:
+            self._update_timer.stop()
 
     def _open_about(self) -> None:
         from llm_manager_app.widgets.about import AboutDialog
@@ -1085,7 +1216,20 @@ class MainWindow(QMainWindow):
         self.model_load_requested.emit(ref, self._model_load_cancel)
         self._sync_model_activity()
 
+    def _yield_automatic_memory(self) -> None:
+        """A message always goes first: stop automatic remembering and try again later.
+
+        The worker handles one request at a time, so the message runs as soon as the
+        stopped capture returns.
+        """
+        if self._memory_busy and self._automatic_capture and not self._memory_cancel.is_set():
+            self._memory_yielded = True
+            self._memory_cancel.set()
+            if self._memory_cid is not None:
+                self._pending_memories[self._memory_cid] = time.monotonic()
+
     def _queue_send(self, cid: int, text: str, params: object) -> None:
+        self._yield_automatic_memory()
         self._stop_requested = False
         self._chat_cancel = threading.Event()
         self.chat_send_requested.emit(
@@ -1094,6 +1238,7 @@ class MainWindow(QMainWindow):
         )
 
     def _queue_regenerate(self, cid: int, params: object) -> None:
+        self._yield_automatic_memory()
         self._stop_requested = False
         self._chat_cancel = threading.Event()
         self.chat_regenerate_requested.emit(
@@ -1292,7 +1437,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"Settings — {_TITLE}")
             return
         if self._sidebar.current_section() == MEMORY:
-            self.setWindowTitle(f"Second Brain — {_TITLE}")
+            self.setWindowTitle(f"Memoria — {_TITLE}")
             return
         if self._sidebar.current_section() == MODELS:
             self.setWindowTitle(f"Models — {_TITLE}")
@@ -1334,11 +1479,14 @@ class MainWindow(QMainWindow):
         if cid < 0:
             return
         self._automatic_capture = automatic
+        self._memory_cid = cid
         self._memory_busy = True
         self._memory_cancel = threading.Event()
         self._memory.set_busy(True)
         self._memory.set_status("Creating connected memories from this conversation…")
-        self._chat_view.set_session_busy(True)
+        if not automatic:
+            # Automatic remembering leaves the composer free; sending interrupts it.
+            self._chat_view.set_session_busy(True)
         self._models.set_chat_busy(True)
         self.memory_requested.emit(cid, self._memory_vault, self._memory_cancel)
 
@@ -1347,7 +1495,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         if (not self._closing and cid >= 0 and not cancelled and chunks > 0
                 and as_bool(self._settings.value(KEY_AUTO_MEMORY, True), True)):
-            self._pending_memories.add(cid)
+            self._pending_memories[cid] = time.monotonic()
 
     def _drain_automatic_memories(self) -> None:
         service = self._chat_service
@@ -1358,8 +1506,14 @@ class MainWindow(QMainWindow):
                 or self._session.status().generating or self._models.job_kind() is not None
                 or not as_bool(self._settings.value(KEY_AUTO_MEMORY, True), True)):
             return
-        cid = min(self._pending_memories)
-        self._pending_memories.discard(cid)
+        now = time.monotonic()
+        current = self._chat_view.conversation_id()
+        ready = [cid for cid, finished in self._pending_memories.items()
+                 if cid != current or now - finished >= AUTO_MEMORY_QUIET_SECONDS]
+        if not ready:
+            return
+        cid = min(ready)
+        del self._pending_memories[cid]
         try:
             conversation = service.get_conversation(cid)
         except EngineError:
@@ -1379,22 +1533,27 @@ class MainWindow(QMainWindow):
 
     def _finish_memory(self) -> None:
         self._automatic_capture = False
+        self._memory_cid = None
         self._memory_busy = False
         self._memory.set_busy(False)
         self._chat_view.set_session_busy(False)
-        self._models.set_chat_busy(False)
+        # A message sent during automatic remembering may already be running.
+        self._models.set_chat_busy(
+            self._chat_view.is_streaming() or self._chat_view._pending is not None
+        )
         self._models.sync_from_session()
         self._sync_memory_available()
         self._sync_model_activity()
 
     def _on_memories_created(self, result: object) -> None:
         automatic = self._automatic_capture
+        self._memory_yielded = False
         self._finish_memory()
         if not isinstance(result, CaptureResult):
             return
         if result.already_saved:
             self._memory.set_status(
-                "This version of the conversation is already in your Second Brain."
+                "This version of the conversation is already in Memoria."
             )
         elif result.notes:
             count = len(result.notes)
@@ -1407,8 +1566,13 @@ class MainWindow(QMainWindow):
         self._memory.refresh(select_key=result.notes[0] if result.notes and not automatic else None)
 
     def _on_memories_failed(self, _code: str, message: str) -> None:
+        yielded = self._memory_yielded
+        self._memory_yielded = False
         self._finish_memory()
-        self._memory.set_status(message)
+        self._memory.set_status(
+            "Paused so your message could go first. Memoria will try again once the "
+            "chat is quiet." if yielded else message
+        )
 
     def _on_memory_recall(self, enabled: bool) -> None:
         self._settings.setValue("memory/recall", enabled)

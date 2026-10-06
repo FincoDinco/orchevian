@@ -4,7 +4,7 @@ Snapshot: September 22, 2026. Based on the current working tree, including work 
 
 ## What this project is
 
-**Orchevian is a local-first desktop AI workspace for discovering, downloading, running, and chatting with language models on your own computer.** It also organizes conversations into projects and turns useful information from chats into a personal, editable Markdown knowledge base called **Second Brain**.
+**Orchevian is a local-first desktop AI workspace for discovering, downloading, running, and chatting with language models on your own computer.** It also organizes conversations into projects and turns useful information from chats into a personal, editable Markdown knowledge base called **Memoria**.
 
 This snapshot includes app-wide default models, in-shell project creation/home, and inline display-name editing in the working tree.
 
@@ -97,7 +97,7 @@ The project was previously called **LLM Manager**. Orchevian is the current prod
 
 The practical idea is to bring model management, everyday AI conversations, and personal knowledge together in one calm desktop interface. Users can choose their own local models, retain their conversations and notes locally, and reuse relevant knowledge in later chats.
 
-This is an actively developed personal project owned by Seth Hardin. The package version is `1.0.0`, the first public release. It ships as desktop installers: a signed and notarized macOS disk image, a Windows installer, and a Linux AppImage, each bundling Python, Qt and llama.cpp (and MLX on Apple Silicon). Ollama is optional.
+This is an actively developed personal project owned by Seth Hardin. The package version is `1.1.0`; 1.0.0 was the first public release. It ships as desktop installers: a signed and notarized macOS disk image, a Windows installer, and a Linux AppImage, each bundling Python, Qt and llama.cpp (and MLX on Apple Silicon). Ollama is optional.
 
 ## Who it is for and what problems it addresses
 
@@ -151,9 +151,9 @@ A project groups related chats and supplies a default model and guidance for new
 
 Project creation takes place inside the main workspace. Users can choose a downloaded model or inherit the app default, browse models, and return without losing the creation draft. Selecting a project opens an in-shell home with its own composer, conversation list, and editable guidance card. Home drafts and model choices are kept separately per project during the app session. Submitting creates a regular project chat. Editing project defaults affects new chats; existing conversations retain their settings. A Files area supports shared uploads, cancellable reading, preview, saving originals, replacement, and removal. New and existing project chats can retrieve selected files on future turns; per-chat selections persist. Project files and chat attachments share the bounded source-context budget. Replies retain versioned excerpts when files change or are removed. Moving a chat switches future file retrieval while preserving its attachments and history. Deleting a project removes its shared files and keeps its chats as unassigned with their attachments and prior source records.
 
-### 4. Second Brain
+### 4. Memoria
 
-Second Brain is a local folder of editable Markdown notes, with:
+Memoria (called Second Brain before 1.1.0) is a local folder of editable Markdown notes, with:
 
 - A note reader and editor.
 - `[[wiki links]]`, backlinks, search, and an interactive graph.
@@ -170,7 +170,7 @@ Memory capture uses the local model and shares its session with chat. Current re
 
 Private Chat is an isolated temporary conversation that fills the workspace until cleared.
 
-- Its messages are not written to the conversation database or Second Brain vault.
+- Its messages are not written to the conversation database or Memoria notes folder.
 - It does not recall saved memories, saved chats, or project guidance.
 - Only the current private conversation and its explicitly attached documents supply its chat context. Private originals, extracted text, and latest-reply source previews stay in memory and clear with the chat.
 - Clearing it or closing the app removes its transcript and unsent draft from application state.
@@ -223,8 +223,8 @@ Local-first therefore does not mean every workflow is offline. Once a compatible
 
 Some repository documentation contains historical roadmap language. Use these implementation distinctions when brainstorming:
 
-- **OpenAI-compatible HTTP API:** implemented for text model listing and streaming/non-streaming chat on `127.0.0.1`. Settings → API controls the GUI server, sharing its single model session. API messages are stateless and exclude saved chats and Second Brain. Last 50 request summaries stay in memory. Tools and multimodal requests are unsupported.
-- **Terminal chat and standalone migration command:** implemented. Terminal chat streams, saves, resumes, and cancels responses; it does not use Second Brain. `migrate` uses the existing additive startup migration path. `serve` runs the API with its own model session and an in-memory library, without opening the conversation database.
+- **OpenAI-compatible HTTP API:** implemented for text model listing and streaming/non-streaming chat on `127.0.0.1`. Settings → API controls the GUI server, sharing its single model session. API messages are stateless and exclude saved chats and Memoria. Last 50 request summaries stay in memory. Tools and multimodal requests are unsupported.
+- **Terminal chat and standalone migration command:** implemented. Terminal chat streams, saves, resumes, and cancels responses; it does not use Memoria. `migrate` uses the existing additive startup migration path. `serve` runs the API with its own model session and an in-memory library, without opening the conversation database.
 - **CLI health:** reports configuration and explicitly says that live session state is not inspected; it does not report a fabricated stopped/unloaded state. CLI model listing is implemented.
 - **Prompt templates:** implemented in the sidebar, with search, creation, editing, deletion, and “Use in new chat.” Templates store guidance and a starter message in the existing local database. Using one saves edits and opens an unassigned chat with the app-default model and an editable unsent draft. Existing chats retain their copied guidance after template edits/deletion. Template edits are protected by Save/Discard/Cancel when replacing the editor or quitting.
 - **Desktop packaging:** initial PyInstaller build recipe, frozen-app smoke check, platform archives/checksums, and a macOS/Windows/Linux artifact workflow are implemented. Preview bundles include Python and Qt; Ollama is installed separately, and MLX/GGUF runtimes are excluded. Signed releases, installers, native inference bundles, and clean-machine validation remain future distribution work.

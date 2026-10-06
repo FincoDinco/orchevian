@@ -288,7 +288,17 @@ def _exercise(root: Path, checks: list[str]) -> None:
             if "Web smoke reference content" not in context or not web.history(cid)[0]["sources"]:
                 raise RuntimeError("Spawned web reading did not retain evidence")
             library.delete_conversation(cid)
+            from llm_engine.services.web_retrieval import _tls_context
+
+            # Without trusted roots every HTTPS search fails, though the fixture passes.
+            if not _tls_context().cert_store_stats()["x509_ca"]:
+                raise RuntimeError("Web search has no trusted certificates")
             checks.append("isolated web retrieval and retained sources (offline fixture)")
+            if os.environ.get("ORCHEVIAN_SMOKE_WEB"):
+                found = retrieve_isolated("What is EBITDA", threading.Event(), lambda _: None)
+                if not found["sources"]:
+                    raise RuntimeError("Real web search read no pages")
+                checks.append(f"real web search ({len(found['sources'])} pages read)")
 
             from llm_engine.services.artifacts import ArtifactService, generate_isolated
 
@@ -387,7 +397,7 @@ def main() -> int:
     args = parser.parse_args()
     checks: list[str] = []
     report = {"ok": False, "frozen": bool(getattr(sys, "frozen", False)), "checks": checks}
-    overrides = ("QT_QPA_PLATFORM", "ORCHEVIAN_CONFIG", "ORCHEVIAN_DB")
+    overrides = ("QT_QPA_PLATFORM", "ORCHEVIAN_CONFIG", "ORCHEVIAN_DB", "ORCHEVIAN_UPDATE_CHECK")
     previous = {name: os.environ.get(name) for name in overrides}
     try:
         with TemporaryDirectory(prefix="orchevian-smoke-") as temporary:
@@ -395,6 +405,7 @@ def main() -> int:
             os.environ["QT_QPA_PLATFORM"] = "offscreen"
             os.environ["ORCHEVIAN_CONFIG"] = str(root / "config.json")
             os.environ["ORCHEVIAN_DB"] = str(root / "data.db")
+            os.environ["ORCHEVIAN_UPDATE_CHECK"] = "0"  # No GitHub request from a check.
             (root / "config.json").write_text(
                 json.dumps({
                     "model_dir": os.environ.get("ORCHEVIAN_SMOKE_MODEL_DIR", str(root / "models")),

@@ -6,6 +6,42 @@ All notable changes to Orchevian are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-06
+
+### Added
+
+- **Update notifications.** Orchevian checks GitHub once a day for a newer release and
+  shows **Update to** *version* in the toolbar when one is out. **Download** gets the
+  installer for your computer; you can also see what's new, skip that version, or check
+  any time from **Help → Check for Updates**. Turn the daily check off in
+  **Settings → General**; it sends nothing about you or your chats.
+- **Support links** in **Help** and **About Orchevian**: the website
+  ([orchevian.com](https://orchevian.com)), support@orchevian.com, and
+  [Buy me a coffee](https://buymeacoffee.com/sethhardin).
+
+### Changed
+
+- Second Brain is now called **Memoria**. Existing notes stay where they are.
+- Automatic remembering no longer slows chats down. It waits until a chat has been quiet
+  for two minutes, or until you move to another chat, instead of running after every
+  reply, and a message you send stops it at once and is answered first.
+- **Settings → General → Memoria** has both switches, "Automatically remember chats"
+  and "Use relevant memories in chats", with what each does. Turn both off to pause
+  Memoria; saved notes are kept.
+- **Templates** opens on a blank template you can type into straight away; Save creates
+  it. You no longer need to click "New template" first.
+
+### Fixed
+
+- Web search failed in the macOS app, with or without a search key: the app's built-in
+  security library looked for trusted website certificates where only the build
+  machine kept them. Web search now uses the certificate list that ships with the app,
+  which also fixes Linux systems that keep certificates outside `/usr/lib/ssl`.
+- File creation no longer fails on three small slips smaller models make: a missing
+  file name (the title is used), `"chart": "none"`, and a caption on a table (kept as
+  the paragraph after it). When creating files does fail, the message lists what was
+  wrong in plain terms instead of the validator's raw output.
+
 ## [1.0.0] - 2026-10-06
 
 The first public release. Orchevian is a rebuild of the app previously called

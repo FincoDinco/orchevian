@@ -585,6 +585,8 @@ def test_model_without_structured_output_reports_error_without_partial_files(tmp
         chat.send(cid, "Create a report", artifact_request={})
         chat._worker_thread.join(20)
         assert errors[0][1].code == "artifact_failed"
+        # Plain reasons, not the validator's echo of model input or its web links.
+        assert "What was wrong" in str(errors[0][1]) and "pydantic.dev" not in str(errors[0][1])
         assert len(backend.prompts) == 2
         assert not chat.artifacts.list(cid)
         assert len(library.get_conversation(cid).messages) == 1
@@ -685,3 +687,30 @@ def test_files_can_be_created_later_in_a_chat_with_guidance(tmp_path):
         assert system.role == "system"
         assert "create_documents" in system.content and "Keep answers short." in system.content
         assert "Suggest five puppy names" in " ".join(t.content for t in backend.prompts[-1])
+
+
+def test_unambiguous_small_model_slips_are_forgiven():
+    call = parse_call(json.dumps({"tool": "create_documents", "files": [
+        {"title": "Q3: Budget/Plan", "format": "pdf", "kind": "document", "chart": "none",
+         "blocks": [{"type": "table", "rows": [["A", "B"]], "caption": "Core concepts"},
+                    {"text": "After"}]},
+        {"filename": "notes.txt", "format": "txt", "kind": "document",
+         "blocks": [{"text": "Hi"}]},
+    ]}))
+    report, notes = call.files
+    assert report.filename == "Q3 Budget Plan.pdf" and report.chart is None
+    assert [(b.type, b.text) for b in report.blocks] == [
+        ("table", ""), ("paragraph", "Core concepts"), ("paragraph", "After")]
+    assert notes.filename == "notes.txt"
+
+
+@pytest.mark.parametrize("spec", [
+    {"format": "txt", "kind": "document", "blocks": [{"text": "No name or title"}]},
+    {"name": "a", "format": "txt", "kind": "document", "author": "Me",
+     "blocks": [{"text": "x"}]},
+    {"name": "a", "format": "txt", "kind": "document", "blocks": [{"text": "x", "style": "b"}]},
+    {"name": "a", "format": "png", "kind": "chart", "chart": "bar"},
+])
+def test_other_mistakes_still_go_back_to_the_model(spec):
+    with pytest.raises(ValueError):
+        parse_call(json.dumps({"tool": "create_documents", "files": [spec]}))

@@ -10,10 +10,11 @@ Everything Orchevian does, feature by feature. For installation, see the
 - [Models](#models)
 - [Web search](#web-search)
 - [Creating files](#creating-files)
-- [Second Brain](#second-brain)
+- [Memoria](#memoria)
 - [Templates](#templates)
 - [Private Chat](#private-chat)
 - [Settings](#settings)
+- [Updates and support](#updates-and-support)
 - [Stopping a stuck model](#stopping-a-stuck-model)
 - [Model runtimes](#model-runtimes)
 - [Data locations](#data-locations)
@@ -42,7 +43,7 @@ In an existing chat, use **+** beside the prompt or drop files into the composer
 
 Send a question to include ready attachments in the chat. Replies receive selected passages with page, paragraph, sheet/cell, or row references. **Sources used** shows those passages grouped by question. Each reply uses at most 8,000 characters of source data; extraction is limited to 200,000 characters per file, with 20 files per chat and 20 MB per file. Pictures and selected PDF pages support local OCR and Ollama vision as described below. Word images and headers are omitted, and Excel formulas are displayed without recalculation. Encrypted, corrupt, unsupported, and unreadable files report an error.
 
-Private-chat attachments stay in memory and clear with the private chat. They do not enter the library or Second Brain. The local API does not accept attachments or retrieve saved files.
+Private-chat attachments stay in memory and clear with the private chat. They do not enter the library or Memoria. The local API does not accept attachments or retrieve saved files.
 
 ## Pictures and scanned PDFs
 
@@ -187,29 +188,40 @@ PDF/image previews render the generated output. Office previews show content ren
 
 Limits: eight files/request, 120,000 characters of model output, 20 MB/output file, 80 versions and 100 MB of files/previews per chat, 90 seconds per generator batch, and 40,000 characters of retained revision/template context. A model that cannot emit the required structured output receives an explicit error after two attempts. Context comes from the same bounded attachment/project retrieval as chat, with source snapshots retained for each generated version. Private generated files and previews stay in memory and clear with Private Chat; explicit Save As can export them, while saved-template and Add to project actions are disabled there. The stateless API and background memory extraction do not invoke creation tools.
 
-## Second Brain
+## Memoria
 
-**Settings → General → Automatically remember chats** is on by default. After a completed regular response, the local model selects durable facts, preferences, decisions, and useful ideas, filters out unhelpful or repeated material, and adds connected notes to Second Brain. Notes require exact conversation evidence and remain editable. Capture runs when the model is idle and briefly uses the same model session; the activity pill at the top of the workspace shows its progress and **Stop** ends it. Turning the setting off cancels automatic capture and leaves existing notes intact. It applies to new completed responses, without scanning old chats on startup.
+Memoria (called Second Brain before 1.1.0) keeps what is worth remembering from your chats as linked notes. Two switches in **Settings → General → Memoria** control it, and both are on by default:
 
-**Second Brain** stores editable Markdown notes with `[[wiki links]]`, backlinks, search, and an interactive graph. Create notes yourself or select **Remember chat** to extract up to six memories using the conversation's local model. Generated notes include an evidence quote, model attribution, and a linked snapshot of the conversation. Repeating capture on an already saved conversation version reuses its memories.
+- **Automatically remember chats.** Once a chat has been quiet for two minutes, or when you move to another chat, the local model selects durable facts, preferences, decisions, and useful ideas, filters out unhelpful or repeated material, and adds connected notes. Notes require exact conversation evidence and remain editable. Remembering uses the same model session, but it never holds up a reply: sending a message stops it at once, and it tries again once the chat is quiet. The activity pill at the top of the workspace shows its progress and **Stop** ends it. Turning the setting off cancels automatic remembering and leaves existing notes intact. It applies to new completed responses, without scanning old chats on startup.
+- **Use relevant memories in chats.** Adds related notes to your prompts (details below). The same switch is on the Memoria page.
 
-Notes live in `second-brain/` beside your database by default. **Choose vault…** opens another folder, including an existing Markdown vault. Notes can be edited outside the app; select **Refresh notes** to pick up changes. Saving reports a conflict when a note has changed on disk. Deleted notes move to the vault's `.trash/` folder.
+Turn both off to pause Memoria completely; your saved notes are kept.
 
-**Use relevant memories in chats** is enabled by default. It adds up to four notes matched by keywords plus up to six notes tagged `about-me`, excluding source transcripts and duplicates. Personal notes can help even when your question uses different words. Generated personal notes must cite your own messages; assistant statements alone cannot add them to your profile. Evidence matching tolerates whitespace and Markdown list markers. You can add or remove the `about-me` tag in a note, or turn recall off in Second Brain to chat without recalled notes. Memory capture runs in the background and can be cancelled.
+**Memoria** stores editable Markdown notes with `[[wiki links]]`, backlinks, search, and an interactive graph. Create notes yourself or select **Remember chat** to extract up to six memories using the conversation's local model. Generated notes include an evidence quote, model attribution, and a linked snapshot of the conversation. Repeating capture on an already saved conversation version reuses its memories.
+
+Notes live in `memoria/` beside your database by default; libraries started before 1.1.0 keep their `second-brain/` folder. **Choose vault…** opens another folder, including an existing Markdown vault. Notes can be edited outside the app; select **Refresh notes** to pick up changes. Saving reports a conflict when a note has changed on disk. Deleted notes move to the vault's `.trash/` folder.
+
+**Use relevant memories in chats** is enabled by default. It adds up to four notes matched by keywords plus up to six notes tagged `about-me`, excluding source transcripts and duplicates. Personal notes can help even when your question uses different words. Generated personal notes must cite your own messages; assistant statements alone cannot add them to your profile. Evidence matching tolerates whitespace and Markdown list markers. You can add or remove the `about-me` tag in a note, or turn recall off in Memoria or Settings to chat without recalled notes.
 
 ## Templates
 
-**Templates** in the sidebar (Ctrl/⌘5) stores reusable chat guidance and starter messages. Create a template with a name, optional description, guidance, and a starter message; use search to find it by name or description. **Save** keeps changes locally. **Use in new chat** saves any edits, creates an unassigned conversation using the app's default model, and places the starter message in the composer for editing. It does not send or load a model. Choose a model if no app default is set.
+**Templates** in the sidebar (Ctrl/⌘5) stores reusable chat guidance and starter messages. The page opens on a blank template, so you can start typing straight away. Give it a name, optional description, guidance, and a starter message, then select **Save**; use search to find it by name or description. **Save** keeps changes locally. **Use in new chat** saves any edits, creates an unassigned conversation using the app's default model, and places the starter message in the composer for editing. It does not send or load a model. Choose a model if no app default is set.
 
 Templates copy their guidance into a new chat. Editing or deleting a template leaves existing chats intact. Unsent regular chat drafts are kept separately per conversation during the app session, including when using a template. Template edits stay in the editor when navigating to another workspace; switching templates, creating another template, or quitting offers Save, Discard, or Cancel for unsaved changes. Template navigation is disabled in Private Chat.
 
 ## Private Chat
 
-**Private Chat** opens from the top-right toolbar beside Downloads (Ctrl/⌘Shift+P also opens it). It fills the app workspace, hides the sidebar and toolbar, and stays active until you select **Clear private chat**. Navigation shortcuts are disabled during private chat. Only messages and explicitly attached documents from the current private chat provide context: saved conversations, project guidance, and Second Brain are excluded. Private messages never enter the conversation database or memory vault. Clearing the chat or closing the app stops the response and erases its transcript and unsent draft. Clearing returns to your regular workspace and restores your regular draft; reopening private chat starts empty.
+**Private Chat** opens from the top-right toolbar beside Downloads (Ctrl/⌘Shift+P also opens it). It fills the app workspace, hides the sidebar and toolbar, and stays active until you select **Clear private chat**. Navigation shortcuts are disabled during private chat. Only messages and explicitly attached documents from the current private chat provide context: saved conversations, project guidance, and Memoria are excluded. Private messages never enter the conversation database or memory vault. Clearing the chat or closing the app stops the response and erases its transcript and unsent draft. Clearing returns to your regular workspace and restores your regular draft; reopening private chat starts empty.
 
 ## Settings
 
 **Settings** stays inside the main workspace. Open it from the sidebar or Ctrl/⌘, and use **Back to chats** or the sidebar to return.
+
+## Updates and support
+
+Orchevian checks GitHub once a day for a newer release; the first check comes about 15 seconds after it opens. When one is out, **Update to** *version* appears in the toolbar. Select it to see **Download**, which downloads the installer for your computer (on a Mac, the disk image), **What's New**, **Skip This Version**, or **Later**. Open the downloaded installer to update, as you did the first time; chats, notes, and settings stay in place. **Help → Check for Updates** (in the Orchevian menu on macOS) checks at any time. Turn off **Settings → General → Check for updates automatically** to stop the daily check; it sends nothing about you or your chats.
+
+For help, use **Help → Orchevian Website**, **Help → Contact Support** (support@orchevian.com), or the links in **About Orchevian**. **Help → Buy Me a Coffee** supports development.
 
 ## Stopping a stuck model
 
@@ -241,7 +253,7 @@ Same XDG-style location on every OS (not `%APPDATA%`):
 | Database (new installs) | `~/.local/share/orchevian/data.db` |
 | Logs (new installs) | `~/.local/share/orchevian/logs/engine.log` |
 
-If `~/.local/share/llm-manager/` already exists, Orchevian continues using it in place, including its existing Second Brain vault. GUI preferences and custom model names are imported once into Orchevian's settings, without replacing newer values.
+If `~/.local/share/llm-manager/` already exists, Orchevian continues using it in place, including its existing Memoria notes folder. GUI preferences and custom model names are imported once into Orchevian's settings, without replacing newer values.
 
 Override with `--config` / `--db`, or `ORCHEVIAN_CONFIG` / `ORCHEVIAN_DB`. The older `LLM_ENGINE_CONFIG` / `LLM_ENGINE_DB` variables remain supported; Orchevian variables take precedence. The `llm-manager` and `llm-engine` commands remain compatibility aliases for `orchevian` and `orchevian-engine`. Python imports stay `llm_manager_app` and `llm_engine` for compatibility.
 
@@ -264,7 +276,7 @@ uv run orchevian-engine chat --conversation 12           # resume a saved conver
 uv run orchevian-engine serve --port 8080                # standalone local API
 ```
 
-Terminal chat streams responses into the terminal and saves user and assistant turns. Use `/exit`, `/quit`, or EOF to leave; Ctrl+C during a response stops it and preserves partial output. With no `--model`, a resumed chat keeps its model, or a new chat uses the sole available model; otherwise the command asks you to specify a model ID from `models`. `--max-tokens` sets the response limit. Terminal chat does not automatically capture or recall Second Brain notes. Prefer closing the GUI before running saved terminal chats against the same database.
+Terminal chat streams responses into the terminal and saves user and assistant turns. Use `/exit`, `/quit`, or EOF to leave; Ctrl+C during a response stops it and preserves partial output. With no `--model`, a resumed chat keeps its model, or a new chat uses the sole available model; otherwise the command asks you to specify a model ID from `models`. `--max-tokens` sets the response limit. Terminal chat does not automatically capture or recall Memoria notes. Prefer closing the GUI before running saved terminal chats against the same database.
 
 `migrate` uses the same additive migrations and pre-engine backup as GUI startup. Repeating it is safe. `health` reports configuration and explicitly says it does not inspect another process's live model session.
 
@@ -290,6 +302,6 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 Replace the model with an ID from `/v1/models`. Supported request fields are `model`, `messages` (text `system`, `user`, or `assistant` messages), `stream`, `temperature`, `top_p`, `max_tokens`, and `n` (1 only). Unsupported fields, tools, and multimodal content return an error. Request bodies are limited to 4 MB and `max_tokens` to 32,768. Token usage is omitted because the backends do not consistently report token counts. Streaming responses use assistant/content deltas and a final `[DONE]`; errors after streaming starts appear as an error event instead of a successful finish. Error messages say what kind of problem occurred, not file paths or a model runtime's own wording; Orchevian's log has the details.
 
-An idle session automatically loads the requested model. API requests share the GUI's one-operation limit with regular/private chat, model management, and memory capture; a competing request returns HTTP 429. Disconnecting a client or stopping the API cancels that API request. It does not stop an unrelated GUI request. API prompts and replies never enter saved conversations or Second Brain, and API requests receive only the messages supplied by the client.
+An idle session automatically loads the requested model. API requests share the GUI's one-operation limit with regular/private chat, model management, and memory capture; a competing request returns HTTP 429. Disconnecting a client or stopping the API cancels that API request. It does not stop an unrelated GUI request. API prompts and replies never enter saved conversations or Memoria, and API requests receive only the messages supplied by the client.
 
 `orchevian-engine serve` runs the same API with its own model session and an in-memory library; it does not open or migrate your conversation database. Use the GUI's API when you want clients to share the GUI's loaded model. Only one server can use a given port. Set `ORCHEVIAN_API_KEY` to a key you choose, at least 16 characters, before starting it; it never makes up or prints a key. On macOS or Linux, for example: `export ORCHEVIAN_API_KEY="ov-$(openssl rand -hex 24)"`. Both servers require the key, accept only `127.0.0.1`/`localhost` host names (blocking DNS-rebinding attacks), and reject browser-origin requests; neither enables CORS.

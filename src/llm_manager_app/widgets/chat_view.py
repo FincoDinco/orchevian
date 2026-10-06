@@ -104,7 +104,7 @@ class ChatView(QWidget):
         self._remember = QToolButton(self)
         self._remember.setObjectName("rememberChatButton")
         self._remember.setIcon(icon("brain"))
-        self._remember.setToolTip("Remember this conversation in your Second Brain")
+        self._remember.setToolTip("Remember this conversation in Memoria")
         self._remember.setAccessibleName("Remember this conversation")
         self._remember.setAutoRaise(True)
         self._remember.setEnabled(False)

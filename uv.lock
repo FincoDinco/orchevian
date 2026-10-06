@@ -859,9 +859,10 @@ wheels = [
 
 [[package]]
 name = "orchevian"
-version = "1.0.0"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "certifi" },
     { name = "defusedxml" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -905,6 +906,7 @@ packaging = [
 
 [package.metadata]
 requires-dist = [
+    { name = "certifi", specifier = ">=2024.2" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28.1" },

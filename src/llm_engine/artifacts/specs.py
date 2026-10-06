@@ -194,6 +194,39 @@ def _load_call(text):
             raise original from None
 
 
+def _forgive_slips(value):
+    """Undo small local-model slips that each have exactly one meaning.
+
+    Nothing is guessed: "chart": "none" means no chart, a block caption keeps its words
+    as the paragraph after that block, and a missing name comes from a "filename" the
+    model wrote instead, or from the title. Everything else still fails validation.
+    """
+    files = value.get("files") if isinstance(value, dict) else None
+    for spec in files if isinstance(files, list) else []:
+        if not isinstance(spec, dict):
+            continue
+        chart = spec.get("chart")
+        if isinstance(chart, str) and chart.strip().lower() in {"", "none", "null"}:
+            del spec["chart"]
+        blocks = spec.get("blocks")
+        if isinstance(blocks, list):
+            kept = []
+            for block in blocks:
+                caption = block.pop("caption", None) if isinstance(block, dict) else None
+                kept.append(block)
+                if isinstance(caption, str) and caption.strip():
+                    kept.append({"type": "paragraph", "text": caption.strip()})
+            spec["blocks"] = kept
+        if "name" not in spec:
+            if isinstance(spec.get("filename"), str):
+                spec["name"] = spec.pop("filename")
+            elif isinstance(spec.get("title"), str) and spec["title"].strip():
+                # Only characters every file system accepts; validation checks the rest.
+                name = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", spec["title"])
+                spec["name"] = " ".join(name.split())[:80].strip(" .") or "Document"
+    return value
+
+
 def parse_call(text: str) -> ToolCall:
     if len(text) > 120_000:
         raise ValueError("Document specification exceeds 120,000 characters")
@@ -203,7 +236,7 @@ def parse_call(text: str) -> ToolCall:
         text = re.sub(r"\s*```$", "", text)
     # No prose extraction or content guessing: schema validation still requires
     # one complete, unambiguous call after the narrow envelope completion above.
-    value = _load_call(text.strip())
+    value = _forgive_slips(_load_call(text.strip()))
     call = ToolCall.model_validate(value)
     names = [spec.filename.casefold() for spec in call.files]
     if len(set(names)) != len(names):

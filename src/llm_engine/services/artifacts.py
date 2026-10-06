@@ -511,10 +511,12 @@ class ArtifactService:
                 if isinstance(exc, EngineError) and exc.code == "cancelled":
                     raise
                 if attempt:
+                    # The repair hint lists what was wrong without echoing the model's
+                    # input or the validator's links.
                     raise EngineError(
                         "artifact_failed",
-                        "Could not create valid files. "
-                        "Try a simpler request or another model. " + str(exc)[:600],
+                        "Could not create valid files. Try a simpler request or another "
+                        "model.\n\nWhat was wrong:\n" + _repair_hint(exc)[:600],
                     )
                 turns.extend(
                     [

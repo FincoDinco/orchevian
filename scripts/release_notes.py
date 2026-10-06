@@ -34,6 +34,10 @@ to download one. To use Ollama models too, install [Ollama](https://ollama.com).
 
 To check a download wasn't altered, compare its SHA-256 checksum with the one listed
 in `SHA256SUMS.txt`.
+
+Orchevian 1.1 and later tell you when an update is out. Questions or problems?
+[orchevian.com](https://orchevian.com) · [support@orchevian.com](mailto:support@orchevian.com)
+· [Buy me a coffee](https://buymeacoffee.com/sethhardin)
 """
 
 

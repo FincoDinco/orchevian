@@ -116,7 +116,8 @@ class TemplatesView(QWidget):
         layout.addWidget(subtitle)
         layout.addWidget(splitter, 1)
         self.refresh()
-        self._sync()
+        # Open on a blank template: typing starts one, and Save creates it.
+        self._populate()
 
     def refresh(self) -> None:
         with QSignalBlocker(self._list):
@@ -239,10 +240,8 @@ class TemplatesView(QWidget):
         except Exception as exc:
             self._status.setText(str(exc))
             return
-        self._populate()
-        self._editing = False
+        self._populate()  # Back to a blank template, ready to type.
         self.refresh()
-        self._sync()
 
     def prepare_close(self) -> bool:
         if not self._dirty:

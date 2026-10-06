@@ -107,7 +107,7 @@ def test_leaving_private_cancels_stream_and_clears_ui_and_late_callbacks(tmp_pat
         assert view.composer().text() == "Keep my regular draft"
         assert view.inspector_open()
         assert library.get_conversation(regular).messages == ()
-        assert window._pending_memories == set()
+        assert not window._pending_memories
         view.on_rejected(private_id, "cancelled", "Private secret")
         assert private_id not in view._rejected_banners
         assert private_id not in view._rejected_drafts

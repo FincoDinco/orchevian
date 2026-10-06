@@ -663,12 +663,12 @@ def test_sidebar_project_folders_and_templates(tmp_path: Path) -> None:
         assert tree is not None
         labels = _sidebar_labels(window._sidebar)
         assert labels == [
-            "Chats", "Models", "Second Brain", "Templates", "Projects"
+            "Chats", "Models", "Memoria", "Templates", "Projects"
         ]
         window._sidebar.new_project(name="Work")
         labels = _sidebar_labels(window._sidebar)
         assert labels == [
-            "Chats", "Models", "Second Brain", "Templates", "Projects", "Work"
+            "Chats", "Models", "Memoria", "Templates", "Projects", "Work"
         ]
         assert window._sidebar.current_selection().project_id == library.list_projects()[0].id
     finally:

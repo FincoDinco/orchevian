@@ -18,6 +18,8 @@ from html.parser import HTMLParser
 from typing import Protocol
 from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
 
+import certifi
+
 from llm_engine.domain.errors import EngineError
 
 # News article HTML is often 1-3 MB with inline scripts; larger pages are refused.
@@ -327,6 +329,10 @@ def _tls_context() -> ssl.SSLContext:
     # Python's default already refuses TLS 1.0 and 1.1; saying so keeps it that way.
     context = ssl.create_default_context()
     context.minimum_version = ssl.TLSVersion.TLSv1_2
+    # A bundled OpenSSL looks for trusted roots where its build machine kept them, such
+    # as a python.org framework's cert.pem, which other Macs and some Linux systems
+    # lack. certifi's roots ship inside the app, as they do for httpx.
+    context.load_verify_locations(cafile=certifi.where())
     return context
 
 

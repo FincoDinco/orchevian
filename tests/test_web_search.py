@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 import time
 from datetime import date
@@ -764,3 +765,17 @@ def test_default_chain_is_free_exa_with_the_question(monkeypatch):
     with pytest.raises(EngineError, match="Exa's free search did not answer. Try again"):
         web.SearchChain().search("q")
     assert not hasattr(web, "BingProvider")
+
+
+def test_web_search_trusts_bundled_roots_when_openssl_has_none(tmp_path, monkeypatch):
+    import ssl
+
+    # As on a Mac without the build machine's python.org cert.pem. Windows also reads
+    # its own certificate store, which these variables don't affect.
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing.pem"))
+    monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path / "missing"))
+    if sys.platform != "win32":
+        assert ssl.create_default_context().cert_store_stats()["x509_ca"] == 0
+    context = web._tls_context()
+    assert context.cert_store_stats()["x509_ca"] > 100
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
