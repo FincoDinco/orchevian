@@ -97,7 +97,7 @@ The project was previously called **LLM Manager**. Orchevian is the current prod
 
 The practical idea is to bring model management, everyday AI conversations, and personal knowledge together in one calm desktop interface. Users can choose their own local models, retain their conversations and notes locally, and reuse relevant knowledge in later chats.
 
-This is an actively developed personal project owned by Seth Hardin. The package version is `1.0.1`; 1.0.0 was the first public release. It ships as desktop installers: a signed and notarized macOS disk image, a Windows installer, and a Linux AppImage, each bundling Python, Qt and llama.cpp (and MLX on Apple Silicon). Ollama is optional.
+This is an actively developed personal project owned by Seth Hardin. The package version is `1.1.0`; 1.0.0 was the first public release. It ships as desktop installers: a signed and notarized macOS disk image, a Windows installer, and a Linux AppImage, each bundling Python, Qt and llama.cpp (and MLX on Apple Silicon). Ollama is optional.
 
 ## Who it is for and what problems it addresses
 
@@ -153,7 +153,7 @@ Project creation takes place inside the main workspace. Users can choose a downl
 
 ### 4. Memoria
 
-Memoria (called Second Brain before 1.0.1) is a local folder of editable Markdown notes, with:
+Memoria (called Second Brain before 1.1.0) is a local folder of editable Markdown notes, with:
 
 - A note reader and editor.
 - `[[wiki links]]`, backlinks, search, and an interactive graph.

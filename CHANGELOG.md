@@ -6,7 +6,18 @@ All notable changes to Orchevian are recorded here. The format follows
 
 ## [Unreleased]
 
-## [1.0.1] - 2026-10-06
+## [1.1.0] - 2026-10-06
+
+### Added
+
+- **Update notifications.** Orchevian checks GitHub once a day for a newer release and
+  shows **Update to** *version* in the toolbar when one is out. **Download** gets the
+  installer for your computer; you can also see what's new, skip that version, or check
+  any time from **Help → Check for Updates**. Turn the daily check off in
+  **Settings → General**; it sends nothing about you or your chats.
+- **Support links** in **Help** and **About Orchevian**: the website
+  ([orchevian.com](https://orchevian.com)), support@orchevian.com, and
+  [Buy me a coffee](https://buymeacoffee.com/sethhardin).
 
 ### Changed
 

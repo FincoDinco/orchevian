@@ -1,6 +1,6 @@
 [project]
 name = "orchevian"
-version = "1.0.1"
+version = "1.1.0"
 description = "A private, local-first AI workspace: chat with local models, your files, and the web, create documents, and keep a personal knowledge base."
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -28,7 +28,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/FincoDinco/orchevian"
+Homepage = "https://orchevian.com"
+Support = "mailto:support@orchevian.com"
+Funding = "https://buymeacoffee.com/sethhardin"
 Source = "https://github.com/FincoDinco/orchevian"
 Issues = "https://github.com/FincoDinco/orchevian/issues"
 Changelog = "https://github.com/FincoDinco/orchevian/blob/main/CHANGELOG.md"
