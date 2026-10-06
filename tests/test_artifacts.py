@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import threading
 import zipfile
 
@@ -102,6 +103,53 @@ def test_editable_slides_notes_form_fields_and_spreadsheet_formulas():
     assert book.calculation.fullCalcOnLoad
     assert "recalculation" in generated.warning
     book.close()
+
+
+def chart_ranges(spec):
+    with zipfile.ZipFile(io.BytesIO(generate(spec).data)) as archive:
+        chart = archive.read("xl/charts/chart1.xml").decode()
+    # Series title, then category and value ranges; Excel hides an axis unless delete="0".
+    return re.findall(r"<(?:\w+:)?f>([^<]*)<", chart)[1:], chart.count('<delete val="0"/>')
+
+
+@pytest.mark.parametrize("label", ["Total", "TOTAL USD", "Grand total", "Subtotal", "Totals"])
+def test_spreadsheet_chart_plots_items_without_trailing_totals_and_shows_axes(label):
+    spec = specification("xlsx")
+    spec.sheets[0].rows = [
+        ["Item", "Cost"], ["Design", 450], ["Review", 100], [label, "=SUM(B2:B3)"],
+    ]
+    assert chart_ranges(spec) == (["'Budget'!$A$2:$A$3", "'Budget'!$B$2:$B$3"], 2)
+
+
+@pytest.mark.parametrize("rows,ranges", [
+    ([["Item", "Cost"], ["Design", 450], ["Totally new", 100]], ["$A$2:$A$3", "$B$2:$B$3"]),
+    ([["Item", "Cost"], ["Total", 450]], ["$A$2", "$B$2"]),  # A lone data row is still charted.
+])
+def test_spreadsheet_chart_keeps_item_rows_that_resemble_totals(rows, ranges):
+    spec = specification("xlsx")
+    spec.sheets[0].rows = rows
+    assert chart_ranges(spec)[0] == [f"'Budget'!{cells}" for cells in ranges]
+
+
+def test_spreadsheet_columns_fit_content_and_print_one_page_wide():
+    from openpyxl import load_workbook
+
+    spec = specification("xlsx")
+    item = "A considerably longer inventory item name"
+    spec.sheets[0].rows = [
+        ["Item", "Quantity", "Unit USD", "Total USD", "Notes"],
+        [item, 4, 12.5, "=B2*C2", "x" * 500],
+    ]
+    book = load_workbook(io.BytesIO(generate(spec).data))
+    try:
+        ws = book["Budget"]
+        widths = [ws.column_dimensions[column].width for column in "ABCDE"]
+        assert widths[0] >= len(item) and widths[4] == 60
+        assert max(widths[1:4]) < 22  # The fixed width that pushed columns onto a second page.
+        assert ws.sheet_properties.pageSetUpPr.fitToPage
+        assert (ws.page_setup.fitToWidth, ws.page_setup.fitToHeight) == (1, 0)
+    finally:
+        book.close()
 
 
 @pytest.mark.parametrize(
@@ -451,6 +499,79 @@ def test_missing_source_attribution_gets_one_repair_before_publish(tmp_path):
             )
         finally:
             session.force_unload()
+
+
+def _create_with_brief(tmp_path, outputs):
+    backend = StructuredBackend(outputs)
+    store = SqliteStore(tmp_path / "data.db")
+    library = LibraryService(store)
+    session = ModelSession(BackendRegistry([backend]))
+    errors = []
+    chat = ChatService(library, session, on_error=lambda *args: errors.append(args))
+    cid = library.create_conversation(model=backend.list_models()[0].ref).summary.id
+    brief = tmp_path / "brief.txt"
+    brief.write_text("Proposal budget is $450")
+    doc = chat.documents.import_file(cid, brief, threading.Event())
+    return backend, store, session, chat, cid, errors, f"D{doc.id[:8]}:1"
+
+
+def test_created_files_credit_sources_by_name_without_internal_excerpt_ids(tmp_path):
+    document = Spec.model_validate({**specification("docx").model_dump(), "blocks": [
+        {"text": "Budget is $450 [source: D0123abcd:1]."},
+        {"type": "list", "items": ["Research [D0123abcd:2]", "[source: D0123abcd:3]"]},
+        {"type": "table", "rows": [["Item", "Source"], ["Design", "brief.txt (D0123abcd:1)"]]},
+        {"text": "Scope (P0123abcdv2:3; V89abcdefv1:2) agreed"},
+        {"text": "Part P20261001 and [source-1] stay"},
+        {"text": "Sources: D0123abcd:1, brief.txt"},
+    ]})
+    deck = specification("pptx")
+    deck.slides[0].bullets = ["Kickoff [D0123abcd:1]"]
+    deck.slides[0].notes = "Sources: brief.txt [source: D0123abcd:1, D0123abcd:2]"
+    call = json.dumps({"tool": "create_documents", "files": [document.model_dump(),
+                                                            deck.model_dump()]})
+    backend, store, session, chat, cid, errors, _ = _create_with_brief(tmp_path, [call])
+    try:
+        chat.send(cid, "Create a proposal and deck from the brief", artifact_request={})
+        chat._worker_thread.join(30)
+        assert not chat._worker_thread.is_alive() and not errors
+        assert len(backend.prompts) == 1  # Cleaned in place; no repair round needed.
+        assert "never copy [source] excerpt identifiers" in backend.prompts[0][0].content
+        made = {a.name: chat.artifacts.get(cid, a.id)[0] for a in chat.artifacts.list(cid)}
+        blocks = made["deliverable.docx"].spec["blocks"]
+        assert [b["text"] for b in blocks if b["type"] == "paragraph"] == [
+            "Budget is $450.", "Scope agreed", "Part P20261001 and [source-1] stay",
+            "Sources: brief.txt",
+        ]
+        assert blocks[1]["items"] == ["Research"]
+        assert blocks[2]["rows"][1] == ["Design", "brief.txt"]
+        slide = made["deliverable.pptx"].spec["slides"][0]
+        assert (slide["bullets"], slide["notes"]) == (["Kickoff"], "Sources: brief.txt")
+        assert not any("0123abcd" in g.text for g in made.values())
+    finally:
+        session.force_unload()
+        store.close()
+
+
+def test_internal_excerpt_id_alone_is_not_source_attribution(tmp_path):
+    deck = specification("pptx")
+    fixed = deck.model_copy(deep=True)
+    fixed.slides[0].notes = "Sources: brief.txt"
+    outputs = []  # The first output needs the real excerpt ID, known only after import.
+    backend, store, session, chat, cid, errors, label = _create_with_brief(tmp_path, outputs)
+    deck.slides[0].notes = f"Sources: [source: {label}]"
+    backend.outputs = iter(
+        json.dumps({"tool": "create_documents", "files": [s.model_dump()]}) for s in (deck, fixed)
+    )
+    try:
+        chat.send(cid, "Create a deck from the brief", artifact_request={})
+        chat._worker_thread.join(30)
+        assert not chat._worker_thread.is_alive() and not errors
+        assert "missing source attribution" in backend.prompts[1][-1].content
+        made = chat.artifacts.get(cid, chat.artifacts.list(cid)[0].id)[0]
+        assert made.spec["slides"][0]["notes"] == "Sources: brief.txt"
+    finally:
+        session.force_unload()
+        store.close()
 
 
 def test_model_without_structured_output_reports_error_without_partial_files(tmp_path):

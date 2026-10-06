@@ -477,6 +477,19 @@ def _check_formula(value, sheets, *, cell=None):
         raise ValueError("Unexpected token in formula")
 
 
+_TOTAL_LABEL = re.compile(r"(grand\s+|sub-?\s*)?totals?\b", re.IGNORECASE)
+
+
+def _cell_width(value):
+    if value is None:
+        return 0
+    if isinstance(value, str) and not value.startswith("="):
+        return max(map(len, value.splitlines()), default=0)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return len(f"{value:,.2f}") + 1  # Room for a currency sign.
+    return 14  # Formula results are unknown until the spreadsheet app calculates them.
+
+
 def _xlsx(spec):
     from openpyxl import Workbook
     from openpyxl.chart import BarChart, LineChart, Reference
@@ -500,17 +513,29 @@ def _xlsx(spec):
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill("solid", fgColor="315B91")
         for column in range(1, ws.max_column + 1):
-            ws.column_dimensions[get_column_letter(column)].width = 22
+            widest = max(
+                (_cell_width(row[column - 1]) for row in sheet.rows if len(row) >= column),
+                default=0,
+            )
+            ws.column_dimensions[get_column_letter(column)].width = min(max(widest + 2, 10), 60)
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+        ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
         for address, number_format in sheet.number_formats.items():
             ws[address].number_format = number_format
         if sheet.chart != "none":
+            # A total plotted beside its own parts dwarfs them; chart only the item rows.
+            last = ws.max_row
+            while last > 2 and _TOTAL_LABEL.match(str(ws.cell(last, 1).value or "").strip()):
+                last -= 1
             chart = BarChart() if sheet.chart == "bar" else LineChart()
             chart.title = spec.title or sheet.name
+            # openpyxl 3.1 omits <c:delete val="0"/>, which Excel reads as hidden axes.
+            chart.x_axis.delete = chart.y_axis.delete = False
             chart.add_data(
-                Reference(ws, min_col=2, max_col=ws.max_column, min_row=1, max_row=ws.max_row),
+                Reference(ws, min_col=2, max_col=ws.max_column, min_row=1, max_row=last),
                 titles_from_data=True,
             )
-            chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=ws.max_row))
+            chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=last))
             ws.add_chart(chart, f"A{ws.max_row + 3}")
     book.calculation = CalcProperties(fullCalcOnLoad=True, forceFullCalc=True)
     output = io.BytesIO()

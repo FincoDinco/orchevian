@@ -26,7 +26,8 @@ def test_desktop_entry_smoke_check(tmp_path):
     assert "isolated artifact generators, previews and ZIP export" in report["checks"]
     assert "isolated web retrieval and retained sources (offline fixture)" in report["checks"]
     assert any(check.startswith("app icon and secret storage") for check in report["checks"])
-    assert len(report["checks"]) == 11
+    assert any(check.startswith("bundled runtimes") for check in report["checks"])
+    assert len(report["checks"]) == 12
 
 
 def test_missing_frozen_runtimes_explain_packaged_limitation(monkeypatch, tmp_path):
@@ -80,3 +81,12 @@ def test_icons_exist_for_every_platform():
     assert (ROOT / "src" / "llm_manager_app" / "assets" / "orchevian.png").is_file()
     spec = (ROOT / "packaging" / "orchevian.spec").read_text()
     assert "orchevian.icns" in spec and "orchevian.ico" in spec
+
+
+def test_layered_mac_icon_has_its_artwork():
+    folder = ROOT / "packaging" / "icons" / "orchevian.icon"
+    document = json.loads((folder / "icon.json").read_text())
+    images = [layer["image-name"] for group in document["groups"] for layer in group["layers"]]
+    assert images == ["node.svg", "orbit.svg", "ring.svg"]
+    assert all((folder / "Assets" / name).is_file() for name in images)
+    assert document["supported-platforms"] == {"squares": ["macOS"]}

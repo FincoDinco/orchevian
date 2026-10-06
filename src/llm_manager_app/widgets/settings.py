@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
@@ -33,7 +34,7 @@ from PySide6.QtWidgets import (
 from llm_engine import config
 from llm_engine.services.openai_api import new_api_key
 from llm_manager_app.model_preferences import default_model, save_default_model
-from llm_manager_app.secret_store import API_KEY_SECRET, SecretStore
+from llm_manager_app.secret_store import API_KEY_SECRET, SecretStore, SecretStoreError
 from llm_manager_app.widgets.web_search_settings import WebSearchSettings
 
 ORG_NAME = "Orchevian"
@@ -255,6 +256,9 @@ class SettingsDialog(QWidget):
         regenerate.setObjectName("regenerateApiKey")
         regenerate.setToolTip("Make a new key. Clients using the old key stop working.")
         regenerate.clicked.connect(self._regenerate_api_key)
+        self._api_key_note = QLabel(page)
+        self._api_key_note.setObjectName("apiKeyNote")
+        self._api_key_note.setWordWrap(True)
         self._api_status = QLabel("Stopped", page)
         self._api_status.setObjectName("apiStatus")
         self._api_status.setWordWrap(True)
@@ -288,6 +292,8 @@ class SettingsDialog(QWidget):
         key_row.addWidget(copy_key)
         key_row.addWidget(regenerate)
         form.addRow("API key", key_row)
+        form.addRow("", self._api_key_note)
+        self._show_api_key_note()
         form.addRow("Status", self._api_status)
         layout.addLayout(form)
         layout.addWidget(QLabel("Try it in a terminal", page))
@@ -329,11 +335,25 @@ class SettingsDialog(QWidget):
         if self._api_recent.toPlainText() != recent:
             self._api_recent.setPlainText(recent)
 
+    def _show_api_key_note(self) -> None:
+        # Startup keeps going when the key can't be saved; this is where that shows.
+        saved = SecretStore(self._settings).get(API_KEY_SECRET) == self._api.api_key
+        self._api_key_note.setText(
+            "" if saved else "This key isn't saved, so it will change when Orchevian "
+            "restarts. Click Regenerate to try saving a key again.")
+        self._api_key_note.setVisible(not saved)
+
     def _regenerate_api_key(self) -> None:
         key = new_api_key()
-        SecretStore(self._settings).set(API_KEY_SECRET, key)
+        try:
+            SecretStore(self._settings).set(API_KEY_SECRET, key)
+        except SecretStoreError as exc:
+            # Keep the current key, so clients using it keep working.
+            QMessageBox.warning(self, "API key not changed", str(exc))
+            return
         self._api.api_key = key
         self._api_key.setText(key)
+        self._show_api_key_note()
 
     def _toggle_api(self, enabled: bool) -> None:
         if self._api_task is not None:

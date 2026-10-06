@@ -5,6 +5,7 @@ import threading
 import time
 from datetime import date
 from email.message import Message
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -451,7 +452,7 @@ def test_fed_search_rejects_clinic_dictionary_and_misleading_page_content():
         fetched.append(url)
         if url.endswith("/misleading"):
             return url, "<p>Welcome to the clinic. Heart rate and pressure points.</p>", "text/html"
-        assert "federalreserve.gov" in url
+        assert urlsplit(url).hostname == "www.federalreserve.gov"
         return url, (
             "<p>The Federal Reserve announced its interest rate decision. "
             "The target range for the federal funds rate increased by 25 basis points.</p>"
@@ -460,7 +461,7 @@ def test_fed_search_rejects_clinic_dictionary_and_misleading_page_content():
     result = web.retrieve(FED_QUESTION, Provider(), fetch, threading.Event(), lambda _: None)
     assert len(queries) == 1 and "Federal Reserve interest rate decision" in queries[0]
     assert len(result["sources"]) == 1  # Never pad to three with unrelated results.
-    assert "federalreserve.gov" in result["sources"][0]["url"]
+    assert urlsplit(result["sources"][0]["url"]).hostname == "www.federalreserve.gov"
     assert all("clevelandclinic" not in url and "cambridge" not in url for url in fetched)
     assert "3 unrelated" in result["warning"]
     assert result["search_query"] == queries[0]

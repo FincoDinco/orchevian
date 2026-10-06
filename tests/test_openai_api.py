@@ -258,3 +258,26 @@ def test_api_requires_its_key_and_bounds_requests(stack):
         too_long = BODY | {"max_tokens": MAX_RESPONSE_TOKENS + 1}
         assert client.post("/v1/chat/completions", json=too_long,
                            headers=auth(api)).status_code in {400, 422}
+
+
+def test_errors_tell_clients_what_happened_but_not_internal_details(monkeypatch):
+    from llm_engine.services import openai_api
+
+    logged = []
+    monkeypatch.setattr(openai_api._log, "warning", lambda *args: logged.append(args))
+    private = EngineError("load_failed", "GGUF load failed: /Users/someone/models/private.gguf")
+    response = openai_api.error_response(private)
+    error = json.loads(response.body)["error"]
+    assert response.status_code == 503 and error["code"] == "load_failed"
+    assert "/Users/someone" not in error["message"] and "log" in error["message"]
+    assert "/Users/someone/models/private.gguf" in str(logged)
+    stream_error = openai_api.public_error(private)["error"]
+    assert "/Users/someone" not in stream_error["message"]
+
+
+def test_invalid_requests_still_say_which_field_is_wrong(stack):
+    api, _chat, _fake, _library = stack
+    with TestClient(api.app, base_url="http://127.0.0.1", headers=auth(api)) as client:
+        response = client.post("/v1/chat/completions", json={"model": BODY["model"]})
+        assert response.status_code == 400
+        assert "messages" in response.json()["error"]["message"]

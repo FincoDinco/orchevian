@@ -23,6 +23,8 @@ BANNED_ROOTS = frozenset(
         "pyqt_liquidglass",
     }
 )
+# The smoke test loads the bundled runtimes in a spawned worker, never in the GUI process.
+ALLOWED = {"smoke_test.py": frozenset({"mlx_lm", "llama_cpp"})}
 
 
 def _top_level(name: str) -> str:
@@ -43,7 +45,8 @@ def _imported_roots(path: Path) -> set[str]:
 def test_app_sources_do_not_import_sqlite3_or_mlx_lm() -> None:
     offenders: list[str] = []
     for path in APP_SRC.rglob("*.py"):
-        for name in sorted(_imported_roots(path) & BANNED_ROOTS):
+        banned = BANNED_ROOTS - ALLOWED.get(path.name, frozenset())
+        for name in sorted(_imported_roots(path) & banned):
             offenders.append(f"{path.relative_to(ROOT)} imports {name}")
     assert offenders == []
 

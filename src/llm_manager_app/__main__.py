@@ -33,13 +33,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     app = QApplication(args)
     app.setOrganizationName(ORG_NAME)
     app.setApplicationName(APP_NAME)
-    # Window and taskbar icon on Windows and Linux; macOS uses the app bundle's icon.
+    # Window and taskbar icon on Windows and Linux. On macOS this would also replace the
+    # Dock icon with a flat picture, losing the bundle's Liquid Glass icon.
     from pathlib import Path
 
     from PySide6.QtGui import QIcon
 
     icon = Path(__file__).parent / "assets" / "orchevian.png"
-    if icon.is_file():
+    if icon.is_file() and sys.platform != "darwin":
         app.setWindowIcon(QIcon(str(icon)))
     # Links the running window to Linux's orchevian.desktop entry.
     app.setDesktopFileName("orchevian")

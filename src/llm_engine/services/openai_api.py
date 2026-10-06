@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import queue
 import secrets
 import socket
@@ -37,6 +38,9 @@ class Message(BaseModel):
 # A request body larger than this is refused before it is read into memory.
 MAX_BODY_BYTES = 4 * 1024 * 1024
 MAX_RESPONSE_TOKENS = 32_768
+
+
+_log = logging.getLogger("llm_engine.api")
 
 
 def new_api_key() -> str:
@@ -84,15 +88,28 @@ def error_body(code: str, message: str) -> dict:
     }
 
 
+# What clients are told for each kind of error. The error itself can carry file paths or
+# a model runtime's own wording, so it goes to Orchevian's log, never into a response.
+_STATUS = {"generating": 429, "not_found": 404, "no_model": 400, "config_invalid": 400,
+           "cancelled": 503}
+_PUBLIC_MESSAGE = {
+    "generating": "Another request is using the model. Try again when it finishes.",
+    "not_found": "Unknown model. Use a model ID returned by /v1/models (backend/name).",
+    "no_model": "Set \"model\" to a model ID returned by /v1/models.",
+    "config_invalid": "The request has settings Orchevian can't use.",
+    "cancelled": "The request was stopped.",
+}
+_UNEXPLAINED = "The model couldn't answer. Orchevian's log has the details."
+
+
+def public_error(exc: EngineError) -> dict:
+    """The error body a client may see; the full error is logged for the user."""
+    _log.warning("API request failed (%s): %s", exc.code, exc)
+    return error_body(exc.code, _PUBLIC_MESSAGE.get(exc.code, _UNEXPLAINED))
+
+
 def error_response(exc: EngineError) -> JSONResponse:
-    status = {
-        "generating": 429,
-        "not_found": 404,
-        "no_model": 400,
-        "config_invalid": 400,
-        "cancelled": 503,
-    }.get(exc.code, 503)
-    return JSONResponse(error_body(exc.code, str(exc)), status_code=status)
+    return JSONResponse(public_error(exc), status_code=_STATUS.get(exc.code, 503))
 
 
 class _Generation:
@@ -372,7 +389,9 @@ class ApiServerService:
             errors = "; ".join(
                 f"{'.'.join(str(part) for part in e['loc'])}: {e['msg']}" for e in exc.errors()
             )
-            return error_response(EngineError("config_invalid", errors))
+            # Only the field names and rules of the client's own request, never Orchevian's.
+            return JSONResponse(error_body("config_invalid", f"Invalid request: {errors}"),
+                                status_code=400)
 
         @app.get("/v1/models")
         def models():
@@ -437,16 +456,12 @@ class ApiServerService:
                                 yield chunk({"content": value})
                                 kind, value = await job.next(request)
                             if kind == "error":
-                                yield (
-                                    "data: "
-                                    + json.dumps(error_body(value.code, str(value)))
-                                    + "\n\n"
-                                )
+                                yield "data: " + json.dumps(public_error(value)) + "\n\n"
                             else:
                                 yield chunk({}, "stop")
                             yield "data: [DONE]\n\n"
                         except EngineError as exc:
-                            yield "data: " + json.dumps(error_body(exc.code, str(exc))) + "\n\n"
+                            yield "data: " + json.dumps(public_error(exc)) + "\n\n"
                             yield "data: [DONE]\n\n"
 
                     handed_off = True

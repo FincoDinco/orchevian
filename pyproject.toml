@@ -1,6 +1,6 @@
 [project]
 name = "orchevian"
-version = "0.1.0"
+version = "1.0.0"
 description = "A private, local-first AI workspace: chat with local models, your files, and the web, create documents, and keep a personal knowledge base."
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -53,7 +53,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-packaging = ["pyinstaller>=6.16,<7"]
+packaging = [
+    "dmgbuild>=1.6 ; sys_platform == 'darwin'",
+    "pyinstaller>=6.16,<7",
+]
 dev = [
     "pytest>=8.3",
     "ruff>=0.9",
@@ -80,3 +83,8 @@ packages = ["src/llm_engine", "src/llm_manager_app"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/llm_engine/store/schema.sql" = "llm_engine/store/schema.sql"
+
+# llama.cpp builds from source. Target a portable CPU baseline rather than the build
+# machine's, so bundled apps don't crash with illegal instructions on older processors.
+[tool.uv.config-settings-package]
+llama-cpp-python = { "cmake.define.GGML_NATIVE" = "OFF" }

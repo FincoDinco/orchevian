@@ -1,6 +1,6 @@
 """Turn a verified desktop build into the download for its platform.
 
-macOS: a .dmg with the app and an Applications shortcut to drag it onto.
+macOS: a .dmg that opens as an installer window: drag the app onto Applications.
 Windows: an Inno Setup installer with Start menu and desktop shortcuts.
 Linux: an AppImage, a single file that runs on most distributions.
 """
@@ -17,6 +17,18 @@ from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
 ICONS = ROOT / "packaging" / "icons"
+# The disk image's Finder window, in points: the app on the left, an arrow, and the
+# Applications folder to drag it onto. scripts/make_icons.py draws the background to fit.
+# The height is the whole window: macOS 26 and later spend about 68 points on the title
+# and tab bar, and the path and status bars, if someone shows them, about 55 more.
+# The content fits in what is left either way.
+DMG_WINDOW = (660, 440)
+DMG_APP_AT = (170, 175)
+DMG_APPLICATIONS_AT = (490, 175)
+DMG_ICON_SIZE = 128
+# Without those bars the window has spare room, so the background runs on below the
+# content instead of leaving a white strip.
+DMG_BACKGROUND_SPARE = 200
 
 
 def arch() -> str:
@@ -31,17 +43,30 @@ def checksum(path: Path) -> None:
                                                      encoding="utf-8")
 
 
-def macos_dmg(app: Path, dist: Path, version: str, smoke) -> Path:
-    target = dist / f"Orchevian-{version}-macos-{arch()}.dmg"
+def macos_dmg(app: Path, dist: Path, version: str, smoke, sign=None) -> Path:
+    import dmgbuild  # In the packaging group on macOS only.
+
+    app = app.resolve()  # dmgbuild changes directory while it works.
+    target = dist.resolve() / f"Orchevian-{version}-macos-{arch()}.dmg"
     target.unlink(missing_ok=True)
-    with TemporaryDirectory(prefix="orchevian-dmg-") as staging:
-        stage = Path(staging)
-        # ditto keeps the bundle's symlinks, permissions and extended attributes.
-        subprocess.run(["ditto", str(app), str(stage / app.name)], check=True)
-        (stage / "Applications").symlink_to("/Applications")
-        subprocess.run(["hdiutil", "create", "-volname", "Orchevian", "-srcfolder", str(stage),
-                        "-fs", "HFS+", "-format", "UDZO", "-ov", str(target)],
-                       check=True, stdout=subprocess.DEVNULL)
+    # Opens as one installer window: the app, an arrow, and Applications to drag it onto.
+    # dmgbuild copies the app with ditto, keeping its symlinks and signature, and writes
+    # the window layout without needing Finder, so it works on build servers.
+    dmgbuild.build_dmg(str(target), "Orchevian", settings={
+        "format": "UDZO",
+        "files": [str(app)],
+        "symlinks": {"Applications": "/Applications"},
+        "icon": str(app / "Contents" / "Resources" / "orchevian.icns"),
+        "background": str(ICONS / "dmg-background.png"),  # With its @2x for Retina.
+        "window_rect": ((200, 120), DMG_WINDOW),
+        "icon_size": DMG_ICON_SIZE,
+        "text_size": 13,
+        "icon_locations": {app.name: DMG_APP_AT, "Applications": DMG_APPLICATIONS_AT},
+        "hide_extensions": [app.name],
+    })
+    if sign is not None:
+        # Signing and stapling change the image, so they come before its checksum.
+        sign(target)
     # Check the copy people will actually run: mount the image and launch it.
     with TemporaryDirectory(prefix="orchevian-dmg-mount-") as mount:
         subprocess.run(["hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", mount,
@@ -54,14 +79,13 @@ def macos_dmg(app: Path, dist: Path, version: str, smoke) -> Path:
     return target
 
 
-def windows_installer(folder: Path, dist: Path, version: str) -> Path | None:
+def windows_installer(folder: Path, dist: Path, version: str) -> Path:
     compiler = shutil.which("iscc") or next(
         (str(p) for p in (Path(os.environ.get("ProgramFiles(x86)", "")) / "Inno Setup 6"
                           / "ISCC.exe",) if p.is_file()), None,
     )
     if compiler is None:
-        print("Inno Setup (iscc) not found; skipping the Windows installer.")
-        return None
+        raise RuntimeError("Inno Setup (iscc) is required to build the Windows installer.")
     name = f"Orchevian-{version}-windows-{arch()}-setup"
     subprocess.run([compiler, f"/DAppVersion={version}", f"/DSourceDir={folder}",
                     f"/DOutputDir={dist}", f"/DOutputName={name}",
@@ -72,11 +96,10 @@ def windows_installer(folder: Path, dist: Path, version: str) -> Path | None:
     return target
 
 
-def linux_appimage(folder: Path, dist: Path, version: str) -> Path | None:
+def linux_appimage(folder: Path, dist: Path, version: str) -> Path:
     tool = os.environ.get("APPIMAGETOOL") or shutil.which("appimagetool")
     if tool is None:
-        print("appimagetool not found; skipping the AppImage.")
-        return None
+        raise RuntimeError("appimagetool is required to build the Linux AppImage.")
     target = dist / f"Orchevian-{version}-linux-{arch()}.AppImage"
     with TemporaryDirectory(prefix="orchevian-appdir-") as temporary:
         appdir = Path(temporary) / "Orchevian.AppDir"

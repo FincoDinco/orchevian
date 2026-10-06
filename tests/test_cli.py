@@ -76,10 +76,10 @@ def test_serve_real_process_stops_on_termination_without_opening_db(paths, tmp_p
     port = free_port()
     process = subprocess.Popen(
         [sys.executable, "-m", "llm_engine", "serve", "--port", str(port), *paths],
-        env=os.environ | {"ORCHEVIAN_API_KEY": "ov-test-key"},
+        env=os.environ | {"ORCHEVIAN_API_KEY": "ov-test-key-0123456789"},
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
-    key = {"Authorization": "Bearer ov-test-key"}
+    key = {"Authorization": "Bearer ov-test-key-0123456789"}
     try:
         def ready():
             if process.poll() is not None:
@@ -104,3 +104,17 @@ def test_serve_real_process_stops_on_termination_without_opening_db(paths, tmp_p
         if process.poll() is None:
             process.kill()
             process.communicate(timeout=3)
+
+
+@pytest.mark.parametrize("key", [None, "", "too-short"])
+def test_serve_requires_a_chosen_key_and_never_prints_one(paths, monkeypatch, capsys, key):
+    if key is None:
+        monkeypatch.delenv("ORCHEVIAN_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("ORCHEVIAN_API_KEY", key)
+    started = []
+    monkeypatch.setattr(cli.ApiServerService, "start", lambda *args, **kwargs: started.append(1))
+    assert cli.main(paths + ["serve"]) == 1
+    output = capsys.readouterr()
+    assert "ORCHEVIAN_API_KEY" in output.err and "at least 16" in output.err
+    assert not started and "ov-" not in output.out

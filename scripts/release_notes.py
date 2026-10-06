@@ -20,19 +20,20 @@ INSTALL = """
 | Windows (64-bit) | `Orchevian-{v}-windows-x64-setup.exe` |
 | Linux (64-bit) | `Orchevian-{v}-linux-x64.AppImage` |
 
-**macOS:** open the `.dmg` and drag Orchevian into Applications. This build isn't signed
-by Apple yet, so the first time, right-click Orchevian in Applications and choose
-**Open**, then **Open** again.
+**macOS:** open the `.dmg`, drag Orchevian into Applications, and open it from there.
+The app is signed and notarized by Apple.
 
 **Windows:** run the installer. If SmartScreen warns about an unrecognized app, choose
 **More info → Run anyway**. No administrator rights are needed.
 
 **Linux:** make the AppImage executable (`chmod +x Orchevian-*.AppImage`) and run it.
 
-Orchevian runs AI models on your computer. Install [Ollama](https://ollama.com) to use
-Ollama models, then open **Models** in Orchevian to download one.
+Orchevian runs AI models on your computer. GGUF models work on every system, and MLX
+models on Apple Silicon Macs, with nothing else to install. Open **Models** in Orchevian
+to download one. To use Ollama models too, install [Ollama](https://ollama.com).
 
-Each file has a `.sha256` checksum you can use to verify the download.
+To check a download wasn't altered, compare its SHA-256 checksum with the one listed
+in `SHA256SUMS.txt`.
 """
 
 

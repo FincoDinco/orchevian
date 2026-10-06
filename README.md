@@ -43,8 +43,9 @@ to, and keep a personal knowledge base. Your conversations stay on your machine.
 - **Linux**: download the `.AppImage`, make it executable, and run it.
 
 The builds aren't code-signed yet, so the first launch shows a warning; the release notes
-explain how to open the app. You'll also need [Ollama](https://ollama.com) to run models.
-Then open **Models** in Orchevian to download one.
+explain how to open the app. GGUF models (and MLX models on Apple Silicon Macs) run
+without anything else installed; [Ollama](https://ollama.com) is optional. Open **Models**
+in Orchevian to download one.
 
 ### Run from source
 
@@ -100,9 +101,13 @@ key. See [Security](docs/security.md) for details.
 
 Orchevian is approaching its 1.0 release. Remaining work:
 
-- Signed installers for macOS, Windows, and Linux, with model runtimes included.
+- Release validation of the bundled runtimes on macOS, Windows, and Linux.
+- Code signing and macOS notarization.
 - Testing on clean machines for each platform.
 - Checking generated Word, PowerPoint, and Excel files in the native Office apps.
+
+See the [release checklist](docs/release-checklist.md) for validation evidence and
+the remaining acceptance checks.
 
 Orchevian was previously called LLM Manager. Existing chats, models, projects, and
 notes carry over automatically.

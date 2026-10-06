@@ -19,6 +19,9 @@ WIKILINK = re.compile(r"(?<!!)\[\[([^\]\n]+)\]\]")
 _MAX_NOTE_BYTES = 512_000
 
 
+ABOUT_ME = "about-me"  # Tag for notes about the user, recalled in every chat.
+
+
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -272,7 +275,19 @@ class MemoryVault:
             trash.mkdir(exist_ok=True)
             self._path(key).rename(trash / f"{Path(key).name}-{uuid.uuid4().hex[:12]}.md")
 
-    def recall(self, query: str, *, limit: int = 4) -> list[MemoryNote]:
+    def recall(self, query: str, *, limit: int = 4, profile: int = 6) -> list[MemoryNote]:
+        """Keyword matches, then up to ``profile`` notes tagged ``about-me``.
+
+        Facts about the user (diet, tools, constraints) matter in chats that share no words
+        with them, so the tag keeps them in context. Anyone can add or remove the tag.
+        """
+        notes = [note for note in self.list_notes() if note.kind != "source"]
+        about = [note for note in notes if ABOUT_ME in note.tags][:profile]
+        matches = self._matches(query, notes, limit)
+        return matches + [note for note in about if note not in matches]
+
+    @staticmethod
+    def _matches(query: str, notes: list[MemoryNote], limit: int) -> list[MemoryNote]:
         terms = set(re.findall(r"\w{3,}", query.casefold())) - {
             "the",
             "and",
@@ -295,7 +310,6 @@ class MemoryVault:
         }
         if not terms:
             return []
-        notes = [note for note in self.list_notes() if note.kind != "source"]
         ranked = []
         for note in notes:
             title = set(re.findall(r"\w{3,}", note.title.casefold()))

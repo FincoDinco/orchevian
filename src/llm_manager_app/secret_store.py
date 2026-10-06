@@ -1,13 +1,15 @@
 """Where Orchevian keeps secrets: search-service keys and the local API key.
 
 The operating system's password vault (macOS Keychain, Windows Credential Manager,
-Linux Secret Service) is used through `keyring`. Where no vault works, such as
+Linux Secret Service) is used through `keyring`. Where no vault exists, such as
 Linux without a keyring service, secrets live in Orchevian's settings, whose file
-is kept private to this account.
+is kept private to this account. If a vault exists but refuses a secret, saving
+fails with `SecretStoreError` rather than leaving the secret in that file.
 """
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QSettings
@@ -16,6 +18,15 @@ from llm_engine.config import make_private
 
 SERVICE = "Orchevian"
 API_KEY_SECRET = "api/key"
+
+
+class SecretStoreError(RuntimeError):
+    """The system password vault exists but did not store a secret."""
+
+
+def _vault_name() -> str:
+    return {"darwin": "the macOS Keychain", "win32": "Windows Credential Manager"}.get(
+        sys.platform, "the system password vault")
 
 
 def _vault():
@@ -62,13 +73,18 @@ class SecretStore:
         if self._vault is not None:
             try:
                 self._vault.set_password(SERVICE, name, value)
-            except Exception:
-                pass
-            else:
-                # Never leave a readable copy behind once the vault has it.
-                self._settings.remove(f"secrets/{name}")
-                self._settings.sync()
-                return
+            except Exception as exc:
+                # Not the settings file: a locked or refused vault would silently leave
+                # the secret in a plain file.
+                detail = f" ({exc})" if str(exc) else ""
+                raise SecretStoreError(
+                    f"Couldn't save the key to {_vault_name()}. Make sure it's unlocked "
+                    f"and that Orchevian is allowed to use it, then try again.{detail}"
+                ) from exc
+            # Never leave a readable copy behind once the vault has it.
+            self._settings.remove(f"secrets/{name}")
+            self._settings.sync()
+            return
         self._settings.setValue(f"secrets/{name}", value)
         self._settings.sync()
         self._harden()
@@ -87,7 +103,10 @@ class SecretStore:
         legacy = str(self._settings.value(legacy_key, "") or "").strip()
         if legacy:
             if not self.get(name):
-                self.set(name, legacy)
+                try:
+                    self.set(name, legacy)
+                except SecretStoreError:
+                    return  # Keep it where it is until the vault accepts it.
             self._settings.remove(legacy_key)
             self._settings.sync()
 

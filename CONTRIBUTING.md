@@ -15,9 +15,9 @@ For security problems, follow [SECURITY.md](SECURITY.md) instead of opening a pu
    [docs/development.md](docs/development.md):
 
    ```bash
-   uv sync --extra gui --group dev
-   uv run ruff check .
-   uv run pytest -q
+   uv sync --locked --extra gui --extra mlx --extra gguf --group dev
+   uv run --no-sync ruff check .
+   uv run --no-sync pytest -q
    ```
 
 3. Keep changes focused, add tests for new behavior, and update the documentation when

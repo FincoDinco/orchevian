@@ -14,8 +14,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 # Build tools that are not part of the frozen app. PyInstaller's bootloader is,
-# so PyInstaller stays.
-BUILD_ONLY = {"altgraph", "macholib", "pyinstaller-hooks-contrib", "setuptools", "pip", "wheel"}
+# so PyInstaller stays. dmgbuild and its helpers only lay out the macOS disk image.
+BUILD_ONLY = {"altgraph", "macholib", "pyinstaller-hooks-contrib", "setuptools", "pip", "wheel",
+              "dmgbuild", "ds-store", "mac-alias"}
 # Orchevian itself, including installs under its former package names.
 OWN = {"orchevian", "llm-engine", "llm-manager"}
 QT_PACKAGES = {"pyside6", "pyside6-addons", "pyside6-essentials", "shiboken6"}

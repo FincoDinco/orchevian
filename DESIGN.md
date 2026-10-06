@@ -133,8 +133,10 @@ addresses, re-checks redirects, and stops after 45 seconds.
 ### Second Brain
 
 Notes are Markdown with `[[wiki links]]`, backlinks and a graph view. Capture uses the
-chat's own model, requires an exact quote from the conversation as evidence, and runs
-only when the model is idle. Relevant notes (up to four) are recalled into later chats.
+chat's own model, requires a conversation quote as evidence (normalizing whitespace and
+list markers), and runs only when the model is idle. Generated personal notes require
+evidence from a user message. Later chats recall up to four keyword matches plus up to
+six `about-me` notes, without duplicates or source transcripts.
 
 ### Local API
 
@@ -183,8 +185,8 @@ listener and the app icon) outside the source checkout before packaging:
 
 Every build includes `LICENSE` and generated `THIRD_PARTY_NOTICES.txt`. Pushing a version
 tag runs `.github/workflows/release.yml`, which builds all three and publishes a GitHub
-Release. Builds are not yet code-signed, and model runtimes other than Ollama are not
-yet bundled. See [packaging/README.md](packaging/README.md).
+Release. Builds bundle llama.cpp (GGUF; Metal on macOS, CPU elsewhere) and, on Apple
+Silicon, MLX; Ollama stays a separate install. Builds are not yet code-signed. See [packaging/README.md](packaging/README.md).
 
 ## Testing
 

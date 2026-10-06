@@ -1,5 +1,7 @@
-"""Ollama-first desktop bundle. Build on each target OS in a clean environment."""
+"""Desktop bundle with Ollama, llama.cpp and (Apple Silicon) MLX. Build on each target OS
+in a clean environment."""
 
+import platform
 import sys
 import tomllib
 from pathlib import Path
@@ -9,11 +11,35 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 root = Path(SPECPATH).parent
 version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
 pdfium_data, pdfium_binaries, pdfium_imports = collect_all("pypdfium2_raw")
+# Model runtimes: native libraries (ggml, Metal shaders) and model architectures that
+# mlx_lm imports by name at load time. MLX only exists for Apple Silicon macOS.
+runtime_data, runtime_binaries, runtime_imports = [], [], []
+packages = ["llama_cpp"]
+if sys.platform == "darwin" and platform.machine() == "arm64":
+    packages += ["mlx", "mlx_lm"]
+for package in packages:
+    try:
+        datas_, binaries_, imports_ = collect_all(package)
+    except Exception:
+        datas_, binaries_, imports_ = [], [], []
+    if package == "llama_cpp" and not binaries_:
+        raise SystemExit("llama-cpp-python is missing: sync the packaging env with --extra gguf")
+    if package == "mlx" and not binaries_:
+        raise SystemExit("MLX is missing: sync the packaging env with --extra mlx")
+    if package == "mlx_lm" and not imports_:
+        raise SystemExit("mlx-lm is missing: sync the packaging env with --extra mlx")
+    runtime_data += datas_
+    runtime_binaries += binaries_
+    runtime_imports += imports_
+# scripts/build_desktop.py compiles packaging/icons/orchevian.icon here. Assets.car holds
+# the layered icon macOS 26 and later draw as Liquid Glass; the .icns is for earlier ones.
+mac_icon = root / "build" / "macos-icon"
+mac_icon_data = [(str(mac_icon / "Assets.car"), ".")] if sys.platform == "darwin" else []
 
 a = Analysis(
     [str(root / "packaging" / "desktop.py")],
     pathex=[str(root / "src")],
-    binaries=pdfium_binaries,
+    binaries=pdfium_binaries + runtime_binaries,
     datas=[
         (str(root / "src/llm_engine/store/schema.sql"), "llm_engine/store"),
         # The migration loader executes these files by path, outside the module archive.
@@ -28,11 +54,11 @@ a = Analysis(
       # python-pptx resolves notes templates through oxml/../templates. The oxml
       # directory must exist on disk even though its modules are in the archive.
       + collect_data_files("pptx", include_py_files=True, includes=["oxml/__init__.py"])
-      + collect_data_files("reportlab") + pdfium_data,
+      + collect_data_files("reportlab") + pdfium_data + runtime_data + mac_icon_data,
     hiddenimports=collect_submodules("uvicorn") + collect_submodules("markdown.extensions")
-                  + pdfium_imports,
-    # Optional native inference stacks need separate platform-specific packaging work.
-    excludes=["mlx", "mlx_lm", "llama_cpp", "torch", "transformers", "PyQt5", "PyQt6"],
+                  + pdfium_imports + runtime_imports,
+    # mlx_lm only needs transformers' tokenizers; never pull in a torch installation.
+    excludes=["torch", "tensorflow", "flax", "jax", "PyQt5", "PyQt6"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -56,9 +82,10 @@ if sys.platform == "darwin":
         collection,
         name="Orchevian.app",
         bundle_identifier="com.orchevian.desktop",
-        icon=str(root / "packaging" / "icons" / "orchevian.icns"),
+        icon=str(mac_icon / "orchevian.icns"),
         version=version,
         info_plist={
+            "CFBundleIconName": "orchevian",
             "CFBundleName": "Orchevian",
             "CFBundleDisplayName": "Orchevian",
             "CFBundleShortVersionString": version,

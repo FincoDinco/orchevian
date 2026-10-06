@@ -115,3 +115,35 @@ def test_api_key_is_shown_copied_and_regenerated(tmp_path):
         assert field.text() == api.api_key
     finally:
         dialog.close()
+
+
+def test_unsaved_api_key_is_explained_and_kept_when_regenerating_fails(tmp_path, monkeypatch):
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton
+
+    from llm_manager_app import secret_store
+    from test_secret_store import LockedVault
+
+    _qapp()
+
+    class Api:
+        api_key = "ov-session-only"
+
+        def status(self):
+            return {"running": False, "port": 8123, "recent_requests": []}
+
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    monkeypatch.setattr(secret_store, "_vault", LockedVault)
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    api = Api()
+    dialog = SettingsDialog(settings=settings, config_get=lambda: {"api_port": 8123},
+                            config_set=lambda **_: None, api=api)
+    try:
+        note = dialog.findChild(QLabel, "apiKeyNote")
+        assert "will change when Orchevian restarts" in note.text()
+        dialog.findChild(QPushButton, "regenerateApiKey").click()
+        assert api.api_key == "ov-session-only"
+        assert warnings and "Couldn't save the key" in warnings[0]
+    finally:
+        dialog.close()

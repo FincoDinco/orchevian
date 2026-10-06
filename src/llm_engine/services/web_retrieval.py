@@ -313,7 +313,7 @@ class _PublicConnection(http.client.HTTPConnection):
                 sock.connect(sockaddr)
                 sock.settimeout(self.timeout)
                 self.sock = (
-                    ssl.create_default_context().wrap_socket(sock, server_hostname=self.host)
+                    _tls_context().wrap_socket(sock, server_hostname=self.host)
                     if self.tls else sock
                 )
                 return
@@ -321,6 +321,13 @@ class _PublicConnection(http.client.HTTPConnection):
                 sock.close()
                 last_error = exc
         raise last_error or TimeoutError("Could not connect")
+
+
+def _tls_context() -> ssl.SSLContext:
+    # Python's default already refuses TLS 1.0 and 1.1; saying so keeps it that way.
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
 
 
 def fetch_public(url: str) -> tuple[str, str, str]:

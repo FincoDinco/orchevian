@@ -14,6 +14,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -27,6 +28,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
-      - run: uv sync --locked --extra gui --group dev
+      # The desktop smoke test requires the same runtimes shipped in the app.
+      # MLX's platform marker limits it to Apple Silicon; GGUF runs on every platform.
+      - run: uv sync --locked --extra gui --extra mlx --extra gguf --group dev
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync pytest -q

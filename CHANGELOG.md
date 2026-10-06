@@ -6,8 +6,11 @@ All notable changes to Orchevian are recorded here. The format follows
 
 ## [Unreleased]
 
-Work toward the first public release, 1.0.0. Orchevian is a rebuild of the app
-previously called LLM Manager; existing chats, models, projects, and notes carry over.
+## [1.0.0] - 2026-10-06
+
+The first public release. Orchevian is a rebuild of the app previously called
+LLM Manager; existing chats, models, projects, and notes carry over.
+Favourite models pinned in LLM Manager are kept, but Orchevian doesn't show them yet.
 
 ### Added
 
@@ -29,7 +32,10 @@ previously called LLM Manager; existing chats, models, projects, and notes carry
 - A native-feeling interface with light and dark themes, press feedback, and support
   for the system Reduce Motion setting.
 - Model runtimes in separate processes, so a stuck model can be stopped at any time.
-- Preview desktop builds for macOS, Windows, and Linux.
+- Desktop apps for macOS, Windows, and Linux that run GGUF models (and MLX models on
+  Apple Silicon) with nothing else to install.
+- The macOS app is signed and notarized by Apple, and its icon follows the macOS 26
+  Liquid Glass styles: default, dark, clear, and tinted.
 
 ### Security
 
@@ -38,7 +44,14 @@ previously called LLM Manager; existing chats, models, projects, and notes carry
 - Your data folder, database, logs, and notes are private to your account; older installs
   are repaired on startup.
 - Search and API keys are stored in the system password vault (Keychain, Credential
-  Manager, Secret Service), or an owner-only file where no vault exists.
+  Manager, Secret Service), or an owner-only file where no vault exists. If the vault
+  refuses a key, for example while the Keychain is locked, Orchevian says so instead
+  of saving the key somewhere else.
 - Replies can't inject raw HTML, images, or non-web links into the chat; hovering a link
   shows where it goes.
 - Build and test workflows pin third-party actions to exact commits.
+- The terminal API server (`orchevian-engine serve`) requires a key you choose, at least
+  16 characters, and never prints one.
+- API error responses no longer include file paths or a model runtime's own error text;
+  Orchevian's log keeps the details.
+- Web pages are fetched over TLS 1.2 or newer only.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from datetime import date
 
 import pytest
 
@@ -69,6 +70,7 @@ def test_pdf_word_and_excel_shared_by_two_chats_but_not_private_or_api(stack, tm
     backend = RecordingBackend()
     session = ModelSession(BackendRegistry([backend]))
     chat = ChatService(library, session)
+    chat.today = lambda: date(2026, 9, 21)  # A Monday, so "Friday" only comes from the brief.
     ref = backend.list_models()[0].ref
     other = library.create_project("Unrelated")
     try:

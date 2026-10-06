@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 from pathlib import Path
@@ -37,7 +38,7 @@ from llm_engine.store.vault import MemoryVault
 from llm_manager_app.icons import icon
 from llm_manager_app.model_names import ModelNames
 from llm_manager_app.model_preferences import default_model
-from llm_manager_app.secret_store import API_KEY_SECRET, SecretStore
+from llm_manager_app.secret_store import API_KEY_SECRET, SecretStore, SecretStoreError
 from llm_manager_app.tokens import apply_studio
 from llm_manager_app.widgets.chat_view import ChatView
 from llm_manager_app.widgets.conversation_list import ConversationList, ConversationStore
@@ -178,7 +179,12 @@ class MainWindow(QMainWindow):
             # The key is created once and kept with Orchevian's other secrets.
             secrets = SecretStore(self._settings)
             api_key = secrets.get(API_KEY_SECRET) or new_api_key()
-            secrets.set(API_KEY_SECRET, api_key)
+            try:
+                secrets.set(API_KEY_SECRET, api_key)
+            except SecretStoreError as exc:
+                # The API starts disabled, so don't interrupt startup: the key works for
+                # this session, and Settings → Local API says it wasn't saved.
+                logging.getLogger("llm_engine.secrets").warning("API key not saved: %s", exc)
             self._api = ApiServerService(
                 self._chat_service, self._catalog_service, api_key=api_key
             )
