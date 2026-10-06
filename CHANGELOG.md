@@ -6,6 +6,15 @@ All notable changes to Orchevian are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-06
+
+### Fixed
+
+- Web search failed in the macOS app, with or without a search key: the app's built-in
+  security library looked for trusted website certificates where only the build
+  machine kept them. Web search now uses the certificate list that ships with the app,
+  which also fixes Linux systems that keep certificates outside `/usr/lib/ssl`.
+
 ## [1.0.0] - 2026-10-06
 
 The first public release. Orchevian is a rebuild of the app previously called
