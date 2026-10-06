@@ -1,6 +1,6 @@
 # Release checklist
 
-Status: October 5, 2026. Version set to 1.0.0 for the first public
+Status: October 6, 2026. **Orchevian 1.0.0 was published** on October 6 as the first public
 release. A passing unit suite or runtime import check does not establish that every
 supported machine can install the app and generate text.
 
@@ -15,6 +15,7 @@ supported machine can install the app and generate text.
 | Installed Mac copy | Passed locally | `dist/install-smoke-report.json`: checksum verified, app copied out of DMG into a temporary path with spaces, image ejected, all 12 checks passed. This is a development Mac, not a clean machine. |
 | Installers and fresh-runner verification | Passed in CI | **Desktop packages** run 36897083553 on `75ff16d`: the macOS DMG, Windows installer, and Linux AppImage each passed checksum verification and all 12 checks on a separate runner (reports copied to `dist/installed-desktop-75ff16d/`). Linux runs the extracted AppImage, not the FUSE launch path. The first run (36431655477) failed on Linux only because the harness used `hashlib.file_digest`, which Ubuntu 22.04's Python 3.10 lacks. |
 | Real-model file generation | Prior bounded pass | `dist/artifact-acceptance-14/report.json` and all nine cases in `dist/model-matrix-08/report.json`. Not native Office acceptance. |
+| Published release | Passed | [Orchevian 1.0.0](https://github.com/FincoDinco/orchevian/releases/tag/v1.0.0), Release run 37483949348 on `fc1886e`: the DMG, Windows installer and AppImage each passed all 12 checks on a fresh runner (`dist/installed-download-v1.0.0/`), with Gatekeeper required for the DMG. The release lists the three installers and `SHA256SUMS.txt`, and is marked Latest. |
 | macOS signing and notarization | Passed in CI | **Desktop packages** run 37024907968 on `85cc479` signed the app with the repository's Developer ID secrets, notarized and stapled the app and the DMG (Apple submissions e9596daa and 4c6b69a5, both Accepted), and the fresh-runner check reported Gatekeeper **Notarized Developer ID** and a stapled ticket for both (`dist/installed-desktop-85cc479/`). Earlier the same day CI's `75ff16d` app, signed locally with no entitlements, passed 12 checks and 14 with real GGUF and MLX models (`dist/macos-signing-01/`). Three earlier runs failed on setup: the signing secret held an Apple Development identity, then a duplicate intermediate import, then an invalid Issuer ID secret. |
 | Windows signing | Deferred until after 1.0 | 1.0 ships the Windows installer unsigned (SmartScreen instructions in the release notes). SignPath Foundation's application asks for evidence the project is used or trusted, which a pre-release project can't show. Plan, decided October 5: after 1.0, gather download counts, stars and announcement posts, then choose between SignPath (free), a Microsoft Store MSIX (free, Microsoft-signed, no SmartScreen warning, but its own packaging project), or Certum's open-source certificate (about €49 a year, publisher shown as the developer; confirm it can sign from CI first). No monthly-fee services. |
 | Secrets scan | Passed | October 5, gitleaks 8.30.1 (`dist/secret-scan-2026-10-05/`, matches redacted): all 109 commits on every local and GitHub branch, commit messages, the 203 files in the working tree, and the macOS, Windows and Linux builds from **Desktop packages** run 37316203686. Only false positives: the `YOUR_API_KEY` placeholder in `docs/user-guide.md`, and 47 code lines in the bundled `transformers` library (such as `AutoTokenizer`). No key, certificate or `.env` file was ever committed; no Apple signing identifier or Tavily-style key appears in history; the builds contain no databases, logs, settings or `sethhardin` paths, and their only `.pem` is certifi's public CA bundle. GitHub secret scanning is off for the repository. |
@@ -22,14 +23,18 @@ supported machine can install the app and generate text.
 
 ## Build and installation
 
-- [ ] Run **Tests** and **Desktop packages** on the exact candidate commit on all
+- [x] Run **Tests** and **Desktop packages** on the exact candidate commit on all
   three platforms. The repository was made public on September 28 after scanning
   the remote history and current tree for credentials; only the `YOUR_API_KEY`
   documentation placeholder was flagged. Standard hosted runs no longer depend on
   the exhausted private-repository minutes allowance. Both passed on all three
-  platforms for `75ff16d` (Tests 36897083725, Desktop packages 36897083553); repeat on
-  the final candidate.
-- [ ] Keep each `installed-desktop-*` artifact as evidence. The verification job
+  platforms for `75ff16d` (Tests 36897083725, Desktop packages 36897083553). Final
+  candidate `2dfd9ca` (PR #7 merged into `main`): Tests 37469996042, CodeQL (0 open, 5
+  fixed) and Desktop packages 37470402941 passed; the released commit `fc1886e` adds
+  only the release workflow fix from PR #8.
+- [x] Keep each `installed-desktop-*` artifact as evidence. Kept in
+  `dist/installed-desktop-2dfd9ca/` and, for the release itself,
+  `dist/installed-download-v1.0.0/`. The verification job
   starts on a separate runner, installs no app Python packages or inference runtimes,
   and tests the downloaded installer rather than the build directory.
 No clean machines are available, so on October 1 the clean-machine checks below were
@@ -139,7 +144,14 @@ same totals, clean save and reopen.
   signature and normal installation behavior. **After 1.0:** see the plan under
   **Windows signing** in Current evidence. Until then the release notes keep the
   SmartScreen instructions.
-- [ ] Finish acceptance before updating all three version fields and the changelog.
-- [ ] Push a release tag only when ready to publish. The release workflow waits for
+- [x] Finish acceptance before updating all three version fields and the changelog.
+- [x] Push a release tag only when ready to publish. The release workflow waits for
   all three installed-download checks, but those checks do not replace the manual
   gates above. Recheck final signed artifact checksums and retain the reports.
+  The first `v1.0.0` run (37482882937) stopped at its tag check, before building:
+  Ubuntu 22.04's Python 3.10 has no `tomllib`. Nothing was published. After the fix
+  (PR #8) the tag was moved to `fc1886e`, and Release run 37483949348 built, verified
+  (Gatekeeper required for macOS) and published
+  [Orchevian 1.0.0](https://github.com/FincoDinco/orchevian/releases/tag/v1.0.0) on
+  October 6 at 15:26 UTC. The public DMG, downloaded again, matches `SHA256SUMS.txt`
+  and Gatekeeper accepts it as Notarized Developer ID with a stapled ticket.
