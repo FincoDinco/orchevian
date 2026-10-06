@@ -14,6 +14,10 @@ All notable changes to Orchevian are recorded here. The format follows
   security library looked for trusted website certificates where only the build
   machine kept them. Web search now uses the certificate list that ships with the app,
   which also fixes Linux systems that keep certificates outside `/usr/lib/ssl`.
+- File creation no longer fails on three small slips smaller models make: a missing
+  file name (the title is used), `"chart": "none"`, and a caption on a table (kept as
+  the paragraph after it). When creating files does fail, the message lists what was
+  wrong in plain terms instead of the validator's raw output.
 
 ## [1.0.0] - 2026-10-06
 
