@@ -8,6 +8,18 @@ All notable changes to Orchevian are recorded here. The format follows
 
 ## [1.0.1] - 2026-10-06
 
+### Changed
+
+- Second Brain is now called **Memoria**. Existing notes stay where they are.
+- Automatic remembering no longer slows chats down. It waits until a chat has been quiet
+  for two minutes, or until you move to another chat, instead of running after every
+  reply, and a message you send stops it at once and is answered first.
+- **Settings → General → Memoria** has both switches, "Automatically remember chats"
+  and "Use relevant memories in chats", with what each does. Turn both off to pause
+  Memoria; saved notes are kept.
+- **Templates** opens on a blank template you can type into straight away; Save creates
+  it. You no longer need to click "New template" first.
+
 ### Fixed
 
 - Web search failed in the macOS app, with or without a search key: the app's built-in

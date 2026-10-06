@@ -116,3 +116,20 @@ def test_unsaved_template_cancel_and_save_on_selection(tmp_path, monkeypatch):
         assert editor._list.currentItem().text() == "Beta"
         assert library.get_template(first.id).system_prompt == "Changed"
         editor.close()
+
+
+def test_template_editor_is_ready_to_type_without_new_template(tmp_path):
+    _qapp()
+    window, store, library, _fake = _window(tmp_path)
+    try:
+        editor = window._templates
+        assert editor._editor.isEnabled()
+        editor._name.setText("First try")  # No "New template" click needed.
+        editor._prompt.setPlainText("Summarize this:")
+        assert editor.save()
+        assert [t.name for t in library.list_templates()] == ["First try"]
+        editor.delete_selected(confirmed=True)
+        assert editor._editor.isEnabled() and editor._name.text() == ""
+    finally:
+        window.close()
+        store.close()
