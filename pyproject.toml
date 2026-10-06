@@ -1,6 +1,6 @@
 [project]
 name = "orchevian"
-version = "1.0.0"
+version = "1.0.1"
 description = "A private, local-first AI workspace: chat with local models, your files, and the web, create documents, and keep a personal knowledge base."
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -11,6 +11,7 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
+    "certifi>=2024.2",
     "httpx>=0.28.1",
     "psutil>=7.2.2",
     "pypdf>=6.0,<7",

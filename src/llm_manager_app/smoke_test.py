@@ -288,7 +288,17 @@ def _exercise(root: Path, checks: list[str]) -> None:
             if "Web smoke reference content" not in context or not web.history(cid)[0]["sources"]:
                 raise RuntimeError("Spawned web reading did not retain evidence")
             library.delete_conversation(cid)
+            from llm_engine.services.web_retrieval import _tls_context
+
+            # Without trusted roots every HTTPS search fails, though the fixture passes.
+            if not _tls_context().cert_store_stats()["x509_ca"]:
+                raise RuntimeError("Web search has no trusted certificates")
             checks.append("isolated web retrieval and retained sources (offline fixture)")
+            if os.environ.get("ORCHEVIAN_SMOKE_WEB"):
+                found = retrieve_isolated("What is EBITDA", threading.Event(), lambda _: None)
+                if not found["sources"]:
+                    raise RuntimeError("Real web search read no pages")
+                checks.append(f"real web search ({len(found['sources'])} pages read)")
 
             from llm_engine.services.artifacts import ArtifactService, generate_isolated
 
